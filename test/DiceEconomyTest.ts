@@ -33,11 +33,11 @@ describe("Dice Contract Economy Test", function () {
       "0x8af398995b04c28e9a51adb9721ef74c74f93e6a478f39e7e0777be13527e7ef" // Mock key hash as bytes32 (as string)
     ]);
 
-    // Fund the contract with initial balance (10 ETH)
+    // Fund the contract with initial balance (100 ETH)
     const [deployer] = await hre.viem.getWalletClients();
     await deployer.sendTransaction({
       to: Dice.address,
-      value: 10n * 10n ** 18n // 10 ETH
+      value: 100n * 10n ** 18n // 100 ETH
     });
 
     return { Dice, MockVRFCoordinator };
@@ -51,17 +51,16 @@ describe("Dice Contract Economy Test", function () {
     const player = account.account.address;
 
     // Initial balances
-    let contractBalance = 10n * 10n ** 18n; // 10 ETH
+    let contractBalance = 100n * 10n ** 18n; // 100 ETH
     let playerBalance = 100n * 10n ** 18n; // Assume player has 100 ETH initially
-
-    // Bet parameters - 0.01 ETH
-    const betAmount = BigInt(10000000000000000); // 0.01 ETH
 
     // Results array to store data for each bet
     const results = [];
 
     // Run 100 bets
     for (let i = 0; i < 1000; i++) {
+      // Bet parameters - Random between 0.01 ETH and 1 ETH
+      const betAmount = (BigInt(Math.floor(Math.random() * 100) + 1)) * 10n ** 16n;
       // Randomly select comparison type and target number
       const comparisonType = Math.floor(Math.random() * 3); // 0: GREATER_THAN, 1: LESS_THAN, 2: EQUAL_TO
 
@@ -146,7 +145,7 @@ describe("Dice Contract Economy Test", function () {
     // Verify the house edge is working as expected
     // Over a large number of bets, the contract should gain value due to the house edge
     // Using direct comparison for BigInt values
-    const initialBalance = 10n * 10n ** 18n;
+    const initialBalance = 100n * 10n ** 18n;
     console.log(`Initial contract balance: ${Number(initialBalance) / 10**18} ETH`);
     console.log(`Contract balance change: ${Number(contractBalance - initialBalance) / 10**18} ETH`);
 
