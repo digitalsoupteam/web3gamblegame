@@ -8,7 +8,7 @@ import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/V
 /**
  * @title Dice Contract
  * @notice A contract that provides a dice roll function using Chainlink VRF v2.5 for randomness
- * @dev Returns a random number between 1 and 100 (inclusive) and allows betting
+ * @dev Returns a random number between 1 and 6 (inclusive) and allows betting
  */
 contract Dice is VRFConsumerBaseV2Plus {
     IVRFCoordinatorV2Plus private immutable coordinator;
@@ -76,7 +76,7 @@ contract Dice is VRFConsumerBaseV2Plus {
     /**
      * @notice Request a random dice roll with a bet
      * @dev Initiates a request to Chainlink VRF for random words and places a bet
-     * @param targetNumber The number to compare the roll result against (10-100, in steps of 10)
+     * @param targetNumber The number to compare the roll result against (1-6)
      * @param comparisonType The type of comparison (GREATER_THAN, LESS_THAN, EQUAL_TO)
      * @return requestId The ID of the VRF request
      */
@@ -88,7 +88,7 @@ contract Dice is VRFConsumerBaseV2Plus {
 
         if (msg.value < MIN_BET || msg.value > MAX_BET) revert InvalidBetAmount();
 
-        if (targetNumber < 10 || targetNumber > 100 || targetNumber % 10 != 0) revert InvalidTargetNumber();
+        if (targetNumber < 1 || targetNumber > 6) revert InvalidTargetNumber();
 
         uint256 payout = calculatePayout(msg.value, targetNumber, comparisonType);
 
@@ -131,7 +131,7 @@ contract Dice is VRFConsumerBaseV2Plus {
      * @notice Calculate the potential payout for a bet
      * @dev Calculates payout based on the odds of winning and dynamic house edge
      * @param betAmount The amount of the bet
-     * @param targetNumber The number to compare the roll result against (10-100, in steps of 10)
+     * @param targetNumber The number to compare the roll result against (1-6)
      * @param comparisonType The type of comparison (GREATER_THAN, LESS_THAN, EQUAL_TO)
      * @return The potential payout amount
      */
@@ -143,20 +143,24 @@ contract Dice is VRFConsumerBaseV2Plus {
         uint256 probability;
 
         if (comparisonType == ComparisonType.GREATER_THAN) {
-            probability = 100 - targetNumber;
+            probability = 6 - targetNumber;
             if (probability == 0) revert InvalidTargetNumber();
         } else if (comparisonType == ComparisonType.LESS_THAN) {
-            if (targetNumber <= 10) revert InvalidTargetNumber();
+            if (targetNumber <= 1) revert InvalidTargetNumber();
             probability = targetNumber - 1;
         } else {
             probability = 1;
         }
 
-        uint256 dynamicHouseEdge = HOUSE_EDGE + (probability * 15) / 100;
+        // For higher probability bets, we want a higher house edge (lower payout)
+        // For lower probability bets, we want a lower house edge (higher payout)
+        // The formula is adjusted to be inversely proportional to probability
+        uint256 dynamicHouseEdge = HOUSE_EDGE + (15 * (6 - probability)) / 6;
 
         if (dynamicHouseEdge < HOUSE_EDGE) dynamicHouseEdge = HOUSE_EDGE;
 
-        uint256 multiplier = (100 * (100 - dynamicHouseEdge)) / probability;
+        // Scale the multiplier for the 1-6 range
+        uint256 multiplier = (6 * (100 - dynamicHouseEdge)) / probability;
 
         return (betAmount * multiplier) / 100;
     }
@@ -175,7 +179,7 @@ contract Dice is VRFConsumerBaseV2Plus {
 
         Bet storage bet = requestIdToBet[_requestId];
 
-        uint256 result = (_randomWords[0] % 100) + 1;
+        uint256 result = (_randomWords[0] % 6) + 1;
 
         rollResults[roller] = result;
 
@@ -206,7 +210,7 @@ contract Dice is VRFConsumerBaseV2Plus {
     /**
      * @notice Get the latest dice roll result for the caller
      * @dev Returns the latest roll result or 0 if no roll has been made
-     * @return The dice roll result (1-100) or 0 if no roll has been made
+     * @return The dice roll result (1-6) or 0 if no roll has been made
      */
     function getLatestRollResult() external view returns (uint256) {
         uint256 result = rollResults[msg.sender];

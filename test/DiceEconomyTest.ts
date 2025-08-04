@@ -2,7 +2,7 @@
  * Dice Contract Economy Test
  * 
  * This file implements the economy stability test for the Dice contract.
- * It runs 100 bets with random parameters, tracks player and contract balances,
+ * It runs 1000 bets with random parameters, tracks player and contract balances,
  * and writes the results to a CSV file (dice_economy_results.csv).
  * 
  * The test verifies that the house edge is working as expected by ensuring
@@ -43,7 +43,7 @@ describe("Dice Contract Economy Test", function () {
     return { Dice, MockVRFCoordinator };
   }
 
-  it("Should run 100 bets and track economy", async function () {
+  it("Should run 1000 bets and track economy", async function () {
     const { Dice, MockVRFCoordinator } = await loadFixture(deployDiceFixture);
 
     // Get a test account
@@ -57,23 +57,23 @@ describe("Dice Contract Economy Test", function () {
     // Results array to store data for each bet
     const results = [];
 
-    // Run 100 bets
+    // Run 1000 bets
     for (let i = 0; i < 1000; i++) {
-      // Bet parameters - Random between 0.01 ETH and 1 ETH
-      const betAmount = (BigInt(Math.floor(Math.random() * 100) + 1)) * 10n ** 16n;
+      // Bet parameters - Random between 0.001 ETH and 0.1 ETH
+      const betAmount = (BigInt(Math.floor(Math.random() * 100) + 1)) * 10n ** 15n;
       // Randomly select comparison type and target number
       const comparisonType = Math.floor(Math.random() * 3); // 0: GREATER_THAN, 1: LESS_THAN, 2: EQUAL_TO
 
       // Ensure valid targetNumber based on comparisonType
       let targetNumber;
       if (comparisonType === 0) { // GREATER_THAN
-        // For GREATER_THAN, targetNumber must be < 100 to avoid probability of 0
-        targetNumber = (Math.floor(Math.random() * 9) + 1) * 10; // 10-90 in steps of 10
+        // For GREATER_THAN, targetNumber must be < 6 to avoid probability of 0
+        targetNumber = Math.floor(Math.random() * 5) + 1; // 1-5
       } else if (comparisonType === 1) { // LESS_THAN
-        // For LESS_THAN, targetNumber must be > 10 to avoid probability of 0
-        targetNumber = (Math.floor(Math.random() * 8) + 2) * 10; // 20-90 in steps of 10
+        // For LESS_THAN, targetNumber must be > 1 to avoid probability of 0
+        targetNumber = Math.floor(Math.random() * 4) + 2; // 2-6
       } else { // EQUAL_TO
-        targetNumber = (Math.floor(Math.random() * 10) + 1) * 10; // 10-100 in steps of 10
+        targetNumber = Math.floor(Math.random() * 6) + 1; // 1-6
       }
 
       // Place bet
@@ -92,8 +92,8 @@ describe("Dice Contract Economy Test", function () {
       const latestEvent = events[events.length - 1];
       const requestId = latestEvent.args.requestId;
 
-      // Generate a random number for the result (1-100)
-      const randomResult = BigInt(Math.floor(Math.random() * 100) + 1);
+      // Generate a random number for the result (1-6)
+      const randomResult = BigInt(Math.floor(Math.random() * 6) + 1);
 
       // Fulfill the random words request
       await MockVRFCoordinator.write.fulfillRandomWords([Dice.address, [randomResult]], {
