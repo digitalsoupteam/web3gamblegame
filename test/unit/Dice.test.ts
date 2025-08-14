@@ -16,7 +16,7 @@ import { loadFixture } from "@nomicfoundation/hardhat-toolbox-viem/network-helpe
 import '@typechain/hardhat'
 import '@nomicfoundation/hardhat-ethers'
 import '@nomicfoundation/hardhat-chai-matchers'
-import { Dice } from "../typechain-types/contracts/Dice";
+import { Dice } from "../../typechain-types/contracts/Dice";
 
 describe("Dice Contract", function () {
   // We define a fixture to reuse the same setup in every test

@@ -17,7 +17,7 @@ import { getAddress } from "viem";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox-viem/network-helpers";
 import fs from "fs";
 import path from "path";
-import { Dice } from "../typechain-types/contracts/Dice";
+import { Dice } from "../../typechain-types/contracts/Dice";
 
 describe("Dice Contract Economy Test", function () {
   // We define a fixture to reuse the same setup in every test
