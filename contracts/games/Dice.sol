@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {IVRFCoordinatorV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
-import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
-import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+import { IVRFCoordinatorV2Plus } from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
+import { VRFConsumerBaseV2Plus } from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
+import { VRFV2PlusClient } from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 
 /**
  * @title Dice Contract
@@ -19,7 +19,10 @@ contract Dice is VRFConsumerBaseV2Plus {
     uint256 public constant MIN_BET = 0.001 ether;
     uint256 public constant MAX_BET = 1 ether;
     uint256 public constant HOUSE_EDGE = 10;
-    enum ComparisonType { GREATER_THAN, LESS_THAN }
+    enum ComparisonType {
+        GREATER_THAN,
+        LESS_THAN
+    }
 
     struct Bet {
         uint256 amount;
@@ -35,9 +38,29 @@ contract Dice is VRFConsumerBaseV2Plus {
     mapping(address => Bet) private bets;
     mapping(uint256 => Bet) private requestIdToBet;
 
-    event DiceRollRequested(uint256 indexed requestId, address indexed roller, uint256 betAmount, uint256 targetNumber, ComparisonType comparisonType);
-    event DiceRollFulfilled(uint256 indexed requestId, address indexed roller, uint256 result, bool won, uint256 payout);
-    event BetSettled(address indexed player, uint256 amount, uint256 targetNumber, ComparisonType comparisonType, uint256 result, bool won, uint256 payout);
+    event DiceRollRequested(
+        uint256 indexed requestId,
+        address indexed roller,
+        uint256 betAmount,
+        uint256 targetNumber,
+        ComparisonType comparisonType
+    );
+    event DiceRollFulfilled(
+        uint256 indexed requestId,
+        address indexed roller,
+        uint256 result,
+        bool won,
+        uint256 payout
+    );
+    event BetSettled(
+        address indexed player,
+        uint256 amount,
+        uint256 targetNumber,
+        ComparisonType comparisonType,
+        uint256 result,
+        bool won,
+        uint256 payout
+    );
 
     error RollInProgress();
     error InvalidRollRange();
@@ -88,7 +111,8 @@ contract Dice is VRFConsumerBaseV2Plus {
 
         if (msg.value < MIN_BET || msg.value > MAX_BET) revert InvalidBetAmount();
 
-        if (targetNumber < 10 || targetNumber > 100 || targetNumber % 10 != 0) revert InvalidTargetNumber();
+        if (targetNumber < 10 || targetNumber > 100 || targetNumber % 10 != 0)
+            revert InvalidTargetNumber();
 
         uint256 payout = calculatePayout(msg.value, targetNumber, comparisonType);
 
@@ -113,7 +137,9 @@ contract Dice is VRFConsumerBaseV2Plus {
             requestConfirmations: requestConfirmations,
             callbackGasLimit: callbackGasLimit,
             numWords: 1,
-            extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: false}))
+            extraArgs: VRFV2PlusClient._argsToBytes(
+                VRFV2PlusClient.ExtraArgsV1({ nativePayment: false })
+            )
         });
 
         uint256 requestId = coordinator.requestRandomWords(request);
@@ -145,7 +171,8 @@ contract Dice is VRFConsumerBaseV2Plus {
         if (comparisonType == ComparisonType.GREATER_THAN) {
             probability = 100 - targetNumber;
             if (probability == 0) revert InvalidTargetNumber();
-        } else { // LESS_THAN
+        } else {
+            // LESS_THAN
             if (targetNumber <= 10) revert InvalidTargetNumber();
             probability = targetNumber - 1;
         }
@@ -181,7 +208,8 @@ contract Dice is VRFConsumerBaseV2Plus {
 
         if (bet.comparisonType == ComparisonType.GREATER_THAN) {
             won = result > bet.targetNumber;
-        } else { // LESS_THAN
+        } else {
+            // LESS_THAN
             won = result < bet.targetNumber;
         }
 
@@ -191,12 +219,20 @@ contract Dice is VRFConsumerBaseV2Plus {
         bets[roller] = bet;
 
         if (won) {
-            (bool success, ) = payable(roller).call{value: bet.payout}("");
+            (bool success, ) = payable(roller).call{ value: bet.payout }("");
             require(success, "Transfer failed");
         }
 
         emit DiceRollFulfilled(_requestId, roller, result, won, won ? bet.payout : 0);
-        emit BetSettled(roller, bet.amount, bet.targetNumber, bet.comparisonType, result, won, won ? bet.payout : 0);
+        emit BetSettled(
+            roller,
+            bet.amount,
+            bet.targetNumber,
+            bet.comparisonType,
+            result,
+            won,
+            won ? bet.payout : 0
+        );
     }
 
     /**
@@ -231,23 +267,20 @@ contract Dice is VRFConsumerBaseV2Plus {
      * @return won Whether the bet was won
      * @return payout The potential payout
      */
-    function getCurrentBet() external view returns (
-        uint256 amount,
-        uint256 targetNumber,
-        ComparisonType comparisonType,
-        bool settled,
-        bool won,
-        uint256 payout
-    ) {
+    function getCurrentBet()
+        external
+        view
+        returns (
+            uint256 amount,
+            uint256 targetNumber,
+            ComparisonType comparisonType,
+            bool settled,
+            bool won,
+            uint256 payout
+        )
+    {
         Bet memory bet = bets[msg.sender];
-        return (
-            bet.amount,
-            bet.targetNumber,
-            bet.comparisonType,
-            bet.settled,
-            bet.won,
-            bet.payout
-        );
+        return (bet.amount, bet.targetNumber, bet.comparisonType, bet.settled, bet.won, bet.payout);
     }
 
     /**
@@ -268,7 +301,7 @@ contract Dice is VRFConsumerBaseV2Plus {
         // For simplicity, we're not implementing access control in this example
         require(amount <= address(this).balance, "Insufficient contract balance");
 
-        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        (bool success, ) = payable(msg.sender).call{ value: amount }("");
         require(success, "Transfer failed");
     }
 }

@@ -1,7 +1,7 @@
 import { buildModule } from '@nomicfoundation/hardhat-ignition/modules';
 
 const VRF_COORDINATOR_ADDRESSES = {
-  baseSepolia: '0x2D159AE3b973FFF05f1BF6fC1f2e33d2C4f7Ee3a',
+  baseSepolia: '0x5C210eF41CD1a72de73bF76eC39637bB0d3d7BEE',
   hardhat: '0x0000000000000000000000000000000000000000',
 };
 
@@ -11,7 +11,7 @@ const SUBSCRIPTION_IDS = {
 };
 
 const KEY_HASHES = {
-  baseSepolia: '0x8af398995b04c28e9951adb9721ef74c74f93e6a478f39e7e0777be13527e7ef',
+  baseSepolia: '0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae5bf7d14d24a5efd44bf71',
   hardhat: '0x8af398995b04c28e9951adb9721ef74c74f93e6a478f39e7e0777be13527e7ef',
 };
 
