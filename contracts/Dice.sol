@@ -19,7 +19,7 @@ contract Dice is VRFConsumerBaseV2Plus {
     uint256 public constant MIN_BET = 0.001 ether;
     uint256 public constant MAX_BET = 1 ether;
     uint256 public constant HOUSE_EDGE = 10;
-    enum ComparisonType { GREATER_THAN, LESS_THAN, EQUAL_TO }
+    enum ComparisonType { GREATER_THAN, LESS_THAN }
 
     struct Bet {
         uint256 amount;
@@ -77,7 +77,7 @@ contract Dice is VRFConsumerBaseV2Plus {
      * @notice Request a random dice roll with a bet
      * @dev Initiates a request to Chainlink VRF for random words and places a bet
      * @param targetNumber The number to compare the roll result against (10-100, in steps of 10)
-     * @param comparisonType The type of comparison (GREATER_THAN, LESS_THAN, EQUAL_TO)
+     * @param comparisonType The type of comparison (GREATER_THAN, LESS_THAN)
      * @return requestId The ID of the VRF request
      */
     function roll(
@@ -132,7 +132,7 @@ contract Dice is VRFConsumerBaseV2Plus {
      * @dev Calculates payout based on the odds of winning and dynamic house edge
      * @param betAmount The amount of the bet
      * @param targetNumber The number to compare the roll result against (10-100, in steps of 10)
-     * @param comparisonType The type of comparison (GREATER_THAN, LESS_THAN, EQUAL_TO)
+     * @param comparisonType The type of comparison (GREATER_THAN, LESS_THAN)
      * @return The potential payout amount
      */
     function calculatePayout(
@@ -145,11 +145,9 @@ contract Dice is VRFConsumerBaseV2Plus {
         if (comparisonType == ComparisonType.GREATER_THAN) {
             probability = 100 - targetNumber;
             if (probability == 0) revert InvalidTargetNumber();
-        } else if (comparisonType == ComparisonType.LESS_THAN) {
+        } else { // LESS_THAN
             if (targetNumber <= 10) revert InvalidTargetNumber();
             probability = targetNumber - 1;
-        } else {
-            probability = 1;
         }
 
         uint256 dynamicHouseEdge = HOUSE_EDGE + (probability * 15) / 100;
@@ -183,10 +181,8 @@ contract Dice is VRFConsumerBaseV2Plus {
 
         if (bet.comparisonType == ComparisonType.GREATER_THAN) {
             won = result > bet.targetNumber;
-        } else if (bet.comparisonType == ComparisonType.LESS_THAN) {
+        } else { // LESS_THAN
             won = result < bet.targetNumber;
-        } else {
-            won = result == bet.targetNumber;
         }
 
         bet.settled = true;

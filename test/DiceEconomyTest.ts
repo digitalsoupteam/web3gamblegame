@@ -61,19 +61,24 @@ describe("Dice Contract Economy Test", function () {
     for (let i = 0; i < 1000; i++) {
       // Bet parameters - Random between 0.01 ETH and 1 ETH
       const betAmount = (BigInt(Math.floor(Math.random() * 100) + 1)) * 10n ** 16n;
+
+      // Skip this bet if player doesn't have enough balance
+      if (playerBalance < betAmount) {
+        console.log(`Skipping bet #${i+1} due to insufficient player balance`);
+        continue;
+      }
+
       // Randomly select comparison type and target number
-      const comparisonType = Math.floor(Math.random() * 3); // 0: GREATER_THAN, 1: LESS_THAN, 2: EQUAL_TO
+      const comparisonType = Math.floor(Math.random() * 2); // 0: GREATER_THAN, 1: LESS_THAN
 
       // Ensure valid targetNumber based on comparisonType
       let targetNumber;
       if (comparisonType === 0) { // GREATER_THAN
         // For GREATER_THAN, targetNumber must be < 100 to avoid probability of 0
         targetNumber = (Math.floor(Math.random() * 9) + 1) * 10; // 10-90 in steps of 10
-      } else if (comparisonType === 1) { // LESS_THAN
+      } else { // LESS_THAN
         // For LESS_THAN, targetNumber must be > 10 to avoid probability of 0
         targetNumber = (Math.floor(Math.random() * 8) + 2) * 10; // 20-90 in steps of 10
-      } else { // EQUAL_TO
-        targetNumber = (Math.floor(Math.random() * 10) + 1) * 10; // 10-100 in steps of 10
       }
 
       // Place bet
@@ -113,7 +118,7 @@ describe("Dice Contract Economy Test", function () {
       // Store result data
       results.push({
         betNumber: i + 1,
-        comparisonType: ["GREATER_THAN", "LESS_THAN", "EQUAL_TO"][comparisonType],
+        comparisonType: ["GREATER_THAN", "LESS_THAN"][comparisonType],
         targetNumber,
         betAmount: Number(betAmount) / 10**18,
         result: Number(latestBetEvent.args.result),
