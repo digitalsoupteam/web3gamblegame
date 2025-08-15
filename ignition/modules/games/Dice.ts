@@ -27,11 +27,17 @@ export default buildModule('DiceModule', m => {
       VRF_COORDINATOR_ADDRESSES[network as keyof typeof VRF_COORDINATOR_ADDRESSES];
   }
 
-  const dice = m.contract('Dice', [
+  const impl = m.contract('Dice', [
     vrfCoordinatorAddress,
     SUBSCRIPTION_IDS[network as keyof typeof SUBSCRIPTION_IDS],
     KEY_HASHES[network as keyof typeof KEY_HASHES],
   ]);
+  const initData = m.encodeFunctionCall(impl, 'initialize', [
+    vrfCoordinatorAddress,
+    SUBSCRIPTION_IDS[network as keyof typeof SUBSCRIPTION_IDS],
+    KEY_HASHES[network as keyof typeof KEY_HASHES],
+  ]);
+  const proxy = m.contract('ERC1967Proxy', [impl, initData]);
 
-  return { dice };
+  return { diceImpl: impl, diceProxy: proxy };
 });

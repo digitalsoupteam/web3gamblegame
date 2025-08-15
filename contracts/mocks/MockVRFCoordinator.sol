@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {IVRFCoordinatorV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
-import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+import { IVRFCoordinatorV2Plus } from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
+import { VRFV2PlusClient } from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 
 /**
  * @title MockVRFCoordinator
@@ -64,13 +64,20 @@ contract MockVRFCoordinator is IVRFCoordinatorV2Plus {
         return (3, 2000000, keyhashes);
     }
 
-    function getSubscription(uint256) external pure override returns (
-        uint96 balance,
-        uint96 nativeBalance,
-        uint64 reqCount,
-        address owner,
-        address[] memory consumers
-    ) {
+    function getSubscription(
+        uint256
+    )
+        external
+        pure
+        override
+        returns (
+            uint96 balance,
+            uint96 nativeBalance,
+            uint64 reqCount,
+            address owner,
+            address[] memory consumers
+        )
+    {
         address[] memory consumersList = new address[](0);
         return (0, 0, 0, address(0), consumersList);
     }
@@ -97,15 +104,11 @@ contract MockVRFCoordinator is IVRFCoordinatorV2Plus {
         return false;
     }
 
-    function getFeeConfig() external pure returns (
-        uint32,
-        uint32,
-        uint32,
-        uint32,
-        uint32,
-        uint32,
-        uint32
-    ) {
+    function getFeeConfig()
+        external
+        pure
+        returns (uint32, uint32, uint32, uint32, uint32, uint32, uint32)
+    {
         return (0, 0, 0, 0, 0, 0, 0);
     }
 
@@ -169,7 +172,10 @@ contract MockVRFCoordinator is IVRFCoordinatorV2Plus {
      * @param maxCount maximum number of subscriptions to return, 0 to return all
      * @return subscriptionIds array of subscription IDs
      */
-    function getActiveSubscriptionIds(uint256 startIndex, uint256 maxCount) external pure override returns (uint256[] memory) {
+    function getActiveSubscriptionIds(
+        uint256 startIndex,
+        uint256 maxCount
+    ) external pure override returns (uint256[] memory) {
         uint256[] memory subscriptionIds = new uint256[](0);
         return subscriptionIds;
     }
