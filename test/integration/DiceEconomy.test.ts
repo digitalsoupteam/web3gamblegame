@@ -13,35 +13,75 @@
 
 import { expect } from 'chai';
 import hre from 'hardhat';
-import { getAddress } from 'viem';
-import { loadFixture } from '@nomicfoundation/hardhat-toolbox-viem/network-helpers';
+import { encodeFunctionData, getAddress, parseEther } from 'viem';
+import { loadFixture, setBalance } from '@nomicfoundation/hardhat-toolbox-viem/network-helpers';
 import fs from 'fs';
 import path from 'path';
 
 describe('Dice Contract Economy Test', function () {
   async function deployDiceFixture() {
-    const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
-    const mockVRFCoordinatorAddress = getAddress(MockVRFCoordinator.address);
+    const [deployer, user, , , , , , administrator, owner1, owner2] =
+      await hre.viem.getWalletClients();
+    const owners = [owner1, owner2];
 
-    const Dice = await hre.viem.deployContract('Dice', [
-      mockVRFCoordinatorAddress,
-      1n,
-      '0x8af398995b04c28e9a51adb9721ef74c74f93e6a478f39e7e0777be13527e7ef',
-    ]);
-
-    const [deployer] = await hre.viem.getWalletClients();
-    await deployer.sendTransaction({
-      to: Dice.address,
-      value: 100n * 10n ** 18n,
+    const ownersMultisigImpl = await hre.viem.deployContract('MultisigWallet');
+    const ownersMultisigImplInitData = encodeFunctionData({
+      abi: ownersMultisigImpl.abi,
+      functionName: 'initialize',
+      args: [BigInt(owners.length), owners.map(owner => owner.account.address)],
     });
+    const ownersMultisigProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      ownersMultisigImpl.address,
+      ownersMultisigImplInitData,
+    ]);
+    const ownersMultisig = await hre.viem.getContractAt(
+      'MultisigWallet',
+      ownersMultisigProxy.address,
+    );
 
-    return { Dice, MockVRFCoordinator };
+    const accessRolesImpl = await hre.viem.deployContract('AccessRoles');
+    const accessRolesInitData = encodeFunctionData({
+      abi: accessRolesImpl.abi,
+      functionName: 'initialize',
+      args: [ownersMultisig.address, []],
+    });
+    const accessRolesProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      accessRolesImpl.address,
+      accessRolesInitData,
+    ]);
+    const accessRoles = await hre.viem.getContractAt('AccessRoles', accessRolesProxy.address);
+
+    const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
+
+    const DiceImpl = await hre.viem.deployContract('Dice', [MockVRFCoordinator.address]);
+    const diceInitData = encodeFunctionData({
+      abi: DiceImpl.abi,
+      functionName: 'initialize',
+      args: [
+        MockVRFCoordinator.address,
+        1n,
+        '0x8af398995b04c28e9a51adb9721ef74c74f93e6a478f39e7e0777be13527e7ef',
+        accessRoles.address,
+        1,
+        100,
+        parseEther('0.001'),
+        parseEther('1'),
+        10,
+      ],
+    });
+    const DiceProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      DiceImpl.address,
+      diceInitData,
+    ]);
+    const Dice = await hre.viem.getContractAt('Dice', DiceProxy.address);
+
+    setBalance(Dice.address, parseEther('100'));
+
+    return { Dice, MockVRFCoordinator, user };
   }
 
   it('Should run 100 bets and track economy', async function () {
-    const { Dice, MockVRFCoordinator } = await loadFixture(deployDiceFixture);
-
-    const [account] = await hre.viem.getWalletClients();
+    const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
 
     let contractBalance = 100n * 10n ** 18n;
     let playerBalance = 100n * 10n ** 18n;
@@ -51,10 +91,7 @@ describe('Dice Contract Economy Test', function () {
     for (let i = 0; i < 1000; i++) {
       const betAmount = BigInt(Math.floor(Math.random() * 100) + 1) * 10n ** 16n;
 
-      if (playerBalance < betAmount) {
-        console.log(`Skipping bet #${i + 1} due to insufficient player balance`);
-        continue;
-      }
+      if (playerBalance < betAmount) continue;
 
       const comparisonType = Math.floor(Math.random() * 2);
 
@@ -69,14 +106,14 @@ describe('Dice Contract Economy Test', function () {
       contractBalance += betAmount;
 
       await Dice.write.roll([BigInt(targetNumber), comparisonType], {
-        account: account.account.address,
+        account: user.account.address,
         value: betAmount,
       });
 
       const randomResult = BigInt(Math.floor(Math.random() * 100) + 1);
 
       await MockVRFCoordinator.write.fulfillRandomWords([Dice.address, [randomResult]], {
-        account: account.account.address,
+        account: user.account.address,
       });
 
       const betEvents = await Dice.getEvents.BetSettled();
