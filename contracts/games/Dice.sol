@@ -371,25 +371,25 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         emit GameUnpaused(msg.sender);
     }
 
-    /**
-     * @notice Withdraw funds from the contract (owners multisig only)
-     * @dev Allows the owners multisig to withdraw funds from the contract
-     * @param amount The amount to withdraw
-     */
-    function withdraw(uint256 amount) external {
-        accessRoles.requireOwnersMultisig(msg.sender);
-        require(amount <= address(this).balance, "Insufficient contract balance");
-
-        (bool success, ) = payable(msg.sender).call{ value: amount }("");
-        require(success, "Transfer failed");
-    }
+    //    /**
+    //     * @notice Withdraw funds from the contract (owners multisig only)
+    //     * @dev Allows the owners multisig to withdraw funds from the contract
+    //     * @param amount The amount to withdraw
+    //     */
+    //    function withdraw(uint256 amount) external {
+    //        accessRoles.requireAdministrator(msg.sender);
+    //        require(amount <= address(this).balance, "Insufficient contract balance");
+    //
+    //        (bool success, ) = payable(msg.sender).call{ value: amount }("");
+    //        require(success, "Transfer failed");
+    //    }
 
     /**
      * @notice Sets the minimum target number value (owners multisig only)
      * @dev Allows the owners multisig to update the minimum target number value
      * @param newMinBetValue The new minimum target number value
      */
-    function setMinBetValue(uint256 newMinBetValue) external {
+    function setMinBetValue(uint8 newMinBetValue) external {
         accessRoles.requireOwnersMultisig(msg.sender);
         require(newMinBetValue > 0, "Min bet value must be greater than 0");
         require(newMinBetValue < maxBetValue, "Min bet value must be less than max bet");
@@ -401,7 +401,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @dev Allows the owners multisig to update the maximum target number value
      * @param newMaxBetValue The new maximum target number value
      */
-    function setMaxBetValue(uint256 newMaxBetValue) external {
+    function setMaxBetValue(uint8 newMaxBetValue) external {
         accessRoles.requireOwnersMultisig(msg.sender);
         require(newMaxBetValue <= 100, "Max bet value must be less or equals to 100");
         require(newMaxBetValue > minBetValue, "Max bet value must be greater than min bet");

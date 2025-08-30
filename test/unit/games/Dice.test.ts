@@ -1,12 +1,11 @@
 import { expect } from 'chai';
 import hre from 'hardhat';
-import { encodeFunctionData, formatEther, getAddress, parseEther } from 'viem';
+import { encodeFunctionData, getAddress, parseEther } from 'viem';
 import {
   impersonateAccount,
   loadFixture,
   setBalance,
 } from '@nomicfoundation/hardhat-toolbox-viem/network-helpers';
-import MultisigWallet from '../../../ignition/modules/access/MultisigWallet';
 
 describe('Dice Contract', function () {
   async function deployDiceFixture() {
@@ -139,6 +138,165 @@ describe('Dice Contract', function () {
     });
   });
 
+  describe('Payout Calculation', function () {
+    it('Should correctly calculate payout for GREATER_THAN bet', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+      const targetNumber = 50n;
+      const comparisonType = 0;
+
+      const payout = await Dice.read.calculatePayout([betAmount, targetNumber, comparisonType], {
+        account: user.account.address,
+      });
+
+      // For GREATER_THAN with targetNumber 50, probability is 50%
+      // Dynamic house edge = 10 + (50 * 15) / 100 = 17.5% (rounded to 17 in solidity)
+      // Multiplier = (100 * (100 - 17)) / 50 = 166
+      // Payout = (betAmount * 166) / 100
+      const expectedPayout = (betAmount * 166n) / 100n;
+      expect(payout).to.equal(expectedPayout);
+    });
+
+    it('Should correctly calculate payout for LESS_THAN bet', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+      const targetNumber = 50n;
+      const comparisonType = 1; // LESS_THAN
+
+      const payout = await Dice.read.calculatePayout([betAmount, targetNumber, comparisonType], {
+        account: user.account.address,
+      });
+
+      // For LESS_THAN with targetNumber 50, probability is 49%
+      // Dynamic house edge = 10 + (49 * 15) / 100 = 17.35% (rounded to 17 in solidity)
+      // Multiplier = (100 * (100 - 17)) / 49 = 169
+      // Payout = (betAmount * 169) / 100
+      const expectedPayout = (betAmount * 169n) / 100n;
+      expect(payout).to.equal(expectedPayout);
+    });
+
+    it('Should revert for invalid target number (probability = 0)', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+
+      // For GREATER_THAN with targetNumber 100, probability is 0
+      await expect(
+        Dice.read.calculatePayout([betAmount, 100n, 0], {
+          account: user.account.address,
+        }),
+      ).to.be.rejectedWith('InvalidTargetNumber');
+
+      // For LESS_THAN with targetNumber 1, probability is 0
+      await expect(
+        Dice.read.calculatePayout([betAmount, 1n, 1], {
+          account: user.account.address,
+        }),
+      ).to.be.rejectedWith('InvalidTargetNumber');
+    });
+  });
+
+  describe('Bet Information', function () {
+    it('Should return empty bet details when no bet has been placed', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+      const bet = await Dice.read.getCurrentBet({
+        account: user.account.address,
+      });
+
+      expect(bet[0]).to.equal(0n);
+      expect(bet[1]).to.equal(0n);
+      expect(bet[2]).to.equal(0);
+      expect(bet[3]).to.be.false;
+      expect(bet[4]).to.be.false;
+      expect(bet[5]).to.equal(0n);
+    });
+
+    it('Should return correct bet details after placing a bet', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+      const targetNumber = 50n;
+      const comparisonType = 0;
+
+      await Dice.write.roll([targetNumber, comparisonType], {
+        account: user.account.address,
+        value: betAmount,
+      });
+
+      const bet = await Dice.read.getCurrentBet({
+        account: user.account.address,
+      });
+
+      expect(bet[0]).to.equal(betAmount);
+      expect(bet[1]).to.equal(targetNumber);
+      expect(bet[2]).to.equal(comparisonType);
+      expect(bet[3]).to.be.false;
+      expect(bet[4]).to.be.false;
+
+      // Verify payout matches calculation
+      const calculatedPayout = await Dice.read.calculatePayout(
+        [betAmount, targetNumber, comparisonType],
+        {
+          account: user.account.address,
+        },
+      );
+      expect(bet[5]).to.equal(calculatedPayout);
+    });
+
+    it('Should update bet details after fulfillment', async function () {
+      const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+      const targetNumber = 50n;
+      const comparisonType = 0;
+
+      await Dice.write.roll([targetNumber, comparisonType], {
+        account: user.account.address,
+        value: betAmount,
+      });
+
+      const randomWord = 74n;
+      const randomWords = [randomWord];
+
+      await MockVRFCoordinator.write.fulfillRandomWords([Dice.address, randomWords], {
+        account: user.account.address,
+      });
+
+      const bet = await Dice.read.getCurrentBet({
+        account: user.account.address,
+      });
+
+      expect(bet[0]).to.equal(betAmount);
+      expect(bet[1]).to.equal(targetNumber);
+      expect(bet[2]).to.equal(comparisonType);
+      expect(bet[3]).to.be.true;
+      expect(bet[4]).to.be.true;
+    });
+  });
+
+  describe('Contract Balance', function () {
+    it('Should return the correct contract balance', async function () {
+      const { Dice, publicClient } = await loadFixture(deployDiceFixture);
+
+      const contractBalance = await Dice.read.getContractBalance();
+      const actualBalance = await publicClient.getBalance({ address: Dice.address });
+
+      expect(contractBalance).to.equal(actualBalance);
+    });
+
+    it('Should update contract balance after receiving a bet', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+
+      const initialBalance = await Dice.read.getContractBalance();
+      const betAmount = 1000000000000000n;
+
+      await Dice.write.roll([50n, 0], {
+        account: user.account.address,
+        value: betAmount,
+      });
+
+      const newBalance = await Dice.read.getContractBalance();
+      expect(newBalance).to.equal(initialBalance + betAmount);
+    });
+  });
+
   describe('Roll Result', function () {
     it('Should return 0 if no roll has been made', async function () {
       const { Dice, user } = await loadFixture(deployDiceFixture);
@@ -214,39 +372,434 @@ describe('Dice Contract', function () {
       expect(rollInProgress).to.be.false;
     });
 
-    // it('Should emit DiceRollFulfilled event when random words are fulfilled', async function () {
-    //   const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
+    it('Should emit DiceRollFulfilled event when random words are fulfilled', async function () {
+      const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
+
+      await Dice.write.roll([50n, 0], {
+        account: user.account.address,
+        value: 1000000000000000n,
+      });
+
+      const randomWords = [123456789n];
+      const diceAddress = Dice.address;
+
+      const txHash = await MockVRFCoordinator.write.fulfillRandomWords([diceAddress, randomWords], {
+        account: user.account.address,
+      });
+      const publicClient = await hre.viem.getPublicClient();
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      const events = await Dice.getEvents.DiceRollFulfilled(
+        {
+          roller: user.account.address,
+        },
+        {
+          blockHash: receipt.blockHash,
+        },
+      );
+
+      expect(events.length).to.equal(1);
+
+      const roller = events[0].args.roller;
+      if (!roller) throw new Error('roller is undefined');
+      expect(getAddress(roller)).to.equal(getAddress(user.account.address));
+
+      const expectedResult = (123456789n % 100n) + 1n;
+      expect(events[0].args.result).to.equal(expectedResult);
+    });
+  });
+  describe('Admin Functions', function () {
+    it('Should allow owners multisig to pause the game', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      // Initially the game should not be paused
+      const initialPauseState = await Dice.read.isPaused();
+      expect(initialPauseState).to.be.false;
+
+      // Pause the game
+      await Dice.write.pause({
+        account: ownersMultisig.address,
+      });
+
+      // Verify the game is paused
+      const pausedState = await Dice.read.isPaused();
+      expect(pausedState).to.be.true;
+    });
+
+    it('Should emit GamePaused event when paused', async function () {
+      const { Dice, ownersMultisig, publicClient } = await loadFixture(deployDiceFixture);
+
+      const txHash = await Dice.write.pause({
+        account: ownersMultisig.address,
+      });
+
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      const events = await Dice.getEvents.GamePaused(
+        {
+          pauser: ownersMultisig.address,
+        },
+        {
+          blockHash: receipt.blockHash,
+        },
+      );
+
+      expect(events.length).to.equal(1);
+      const pauser = events[0].args.pauser;
+      if (!pauser) throw new Error('pauser is undefined');
+      expect(getAddress(pauser)).to.equal(getAddress(ownersMultisig.address));
+    });
+
+    it('Should prevent non-owners from pausing the game', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+
+      await expect(
+        Dice.write.pause({
+          account: user.account.address,
+        }),
+      ).to.be.rejected;
+    });
+
+    it('Should prevent betting when game is paused', async function () {
+      const { Dice, ownersMultisig, user } = await loadFixture(deployDiceFixture);
+
+      await Dice.write.pause({
+        account: ownersMultisig.address,
+      });
+
+      await expect(
+        Dice.write.roll([50n, 0], {
+          account: user.account.address,
+          value: 1000000000000000n,
+        }),
+      ).to.be.rejectedWith('GameIsPaused');
+    });
+
+    it('Should allow owners multisig to unpause the game', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      // Pause the game first
+      await Dice.write.pause({
+        account: ownersMultisig.address,
+      });
+
+      // Verify the game is paused
+      const pausedState = await Dice.read.isPaused();
+      expect(pausedState).to.be.true;
+
+      // Unpause the game
+      await Dice.write.unpause({
+        account: ownersMultisig.address,
+      });
+
+      // Verify the game is unpaused
+      const unpausedState = await Dice.read.isPaused();
+      expect(unpausedState).to.be.false;
+    });
+
+    it('Should emit GameUnpaused event when unpaused', async function () {
+      const { Dice, ownersMultisig, publicClient } = await loadFixture(deployDiceFixture);
+
+      // Pause the game first
+      await Dice.write.pause({
+        account: ownersMultisig.address,
+      });
+
+      const txHash = await Dice.write.unpause({
+        account: ownersMultisig.address,
+      });
+
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      const events = await Dice.getEvents.GameUnpaused(
+        {
+          unpauser: ownersMultisig.address,
+        },
+        {
+          blockHash: receipt.blockHash,
+        },
+      );
+
+      expect(events.length).to.equal(1);
+      const unpauser = events[0].args.unpauser;
+      if (!unpauser) throw new Error('unpauser is undefined');
+      expect(getAddress(unpauser)).to.equal(getAddress(ownersMultisig.address));
+    });
+
+    it('Should prevent non-owners from unpausing the game', async function () {
+      const { Dice, ownersMultisig, user } = await loadFixture(deployDiceFixture);
+
+      // Pause the game first
+      await Dice.write.pause({
+        account: ownersMultisig.address,
+      });
+
+      await expect(
+        Dice.write.unpause({
+          account: user.account.address,
+        }),
+      ).to.be.rejected;
+    });
+
+    // it('Should allow owners multisig to withdraw funds', async function () {
+    //   const { Dice, owner1, ownersMultisig, publicClient } = await loadFixture(deployDiceFixture);
     //
-    //   await Dice.write.roll([50n, 0], {
-    //     user: user.account.address,
-    //     value: 1000000000000000n,
+    //   const initialContractBalance = await Dice.read.getContractBalance();
+    //   const initialMultisigBalance = await publicClient.getBalance({
+    //     address: ownersMultisig.address,
     //   });
     //
-    //   const randomWords = [123456789n];
-    //   const diceAddress = Dice.address;
+    //   const withdrawAmount = initialContractBalance / 2n;
     //
-    //   const txHash = await MockVRFCoordinator.write.fulfillRandomWords([diceAddress, randomWords], {
-    //     account: user.account.address,
+    //   await Dice.write.withdraw([withdrawAmount], {
+    //     account: owner1.account.address,
     //   });
-    //   const publicClient = await hre.viem.getPublicClient();
-    //   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-    //   const events = await Dice.getEvents.DiceRollFulfilled(
-    //     {
-    //       roller: user.account.address,
-    //     },
-    //     {
-    //       blockHash: receipt.blockHash,
-    //     },
-    //   );
     //
-    //   expect(events.length).to.equal(1);
+    //   const finalContractBalance = await Dice.read.getContractBalance();
+    //   const finalMultisigBalance = await publicClient.getBalance({
+    //     address: ownersMultisig.address,
+    //   });
+    //   const owner1Balance = await publicClient.getBalance({
+    //     address: owner1.account.address,
+    //   });
+    //   console.log(finalContractBalance, finalMultisigBalance, owner1Balance);
     //
-    //   const roller = events[0].args.roller;
-    //   if (!roller) throw new Error('roller is undefined');
-    //   expect(getAddress(roller)).to.equal(getAddress(user.account.address));
+    //   expect(finalContractBalance).to.equal(initialContractBalance - withdrawAmount);
     //
-    //   const expectedResult = (123456789n % 100n) + 1n;
-    //   expect(events[0].args.result).to.equal(expectedResult);
+    //   expect(finalMultisigBalance > initialMultisigBalance).to.be.true;
     // });
+
+    // it('Should prevent non-owners from withdrawing funds', async function () {
+    //   const { Dice, user } = await loadFixture(deployDiceFixture);
+    //
+    //   await expect(
+    //     Dice.write.withdraw([1000000000000000n], {
+    //       account: user.account.address,
+    //     }),
+    //   ).to.be.rejected;
+    // });
+    //
+    // it('Should prevent withdrawing more than the contract balance', async function () {
+    //   const { Dice, owner1 } = await loadFixture(deployDiceFixture);
+    //
+    //   const contractBalance = await Dice.read.getContractBalance();
+    //   const excessiveAmount = contractBalance + 1000000000000000n;
+    //
+    //   await expect(
+    //     Dice.write.withdraw([excessiveAmount], {
+    //       account: owner1.account.address,
+    //     }),
+    //   ).to.be.rejectedWith('Insufficient contract balance');
+    // });
+  });
+
+  describe('Configuration Functions', function () {
+    it('Should allow owners multisig to set minimum bet value', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const initialMinBetValue = await Dice.read.minBetValue();
+      const newMinBetValue = initialMinBetValue + 1;
+
+      await Dice.write.setMinBetValue([newMinBetValue], {
+        account: ownersMultisig.address,
+      });
+
+      const updatedMinBetValue = await Dice.read.minBetValue();
+      expect(updatedMinBetValue).to.equal(newMinBetValue);
+    });
+
+    it('Should prevent setting invalid minimum bet value', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const maxBetValue = await Dice.read.maxBetValue();
+
+      await expect(
+        Dice.write.setMinBetValue([0], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Min bet value must be greater than 0');
+
+      await expect(
+        Dice.write.setMinBetValue([maxBetValue], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Min bet value must be less than max bet');
+
+      await expect(
+        Dice.write.setMinBetValue([maxBetValue + 1], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Min bet value must be less than max bet');
+    });
+
+    it('Should allow owners multisig to set maximum bet value', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const newMaxBetValue = 95;
+
+      await Dice.write.setMaxBetValue([newMaxBetValue], {
+        account: ownersMultisig.address,
+      });
+
+      const updatedMaxBetValue = await Dice.read.maxBetValue();
+      expect(updatedMaxBetValue).to.equal(newMaxBetValue);
+    });
+
+    it('Should prevent setting invalid maximum bet value', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const minBetValue = await Dice.read.minBetValue();
+
+      // Try to set max bet value greater than 100
+      await expect(
+        Dice.write.setMaxBetValue([101], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Max bet value must be less or equals to 100');
+
+      // Try to set max bet value equal to min bet value
+      await expect(
+        Dice.write.setMaxBetValue([minBetValue], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Max bet value must be greater than min bet');
+
+      // Try to set max bet value less than min bet value
+      await expect(
+        Dice.write.setMaxBetValue([minBetValue - 1], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Max bet value must be greater than min bet');
+    });
+
+    it('Should allow owners multisig to set minimum bet amount', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const initialMinBetAmount = await Dice.read.minBetAmount();
+      const newMinBetAmount = initialMinBetAmount + parseEther('0.001');
+
+      await Dice.write.setMinBetAmount([newMinBetAmount], {
+        account: ownersMultisig.address,
+      });
+
+      const updatedMinBetAmount = await Dice.read.minBetAmount();
+      expect(updatedMinBetAmount).to.equal(newMinBetAmount);
+    });
+
+    it('Should prevent setting invalid minimum bet amount', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const maxBetAmount = await Dice.read.maxBetAmount();
+
+      // Try to set min bet amount to 0
+      await expect(
+        Dice.write.setMinBetAmount([0n], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Min bet amount must be greater than 0');
+
+      // Try to set min bet amount equal to max bet amount
+      await expect(
+        Dice.write.setMinBetAmount([maxBetAmount], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Min bet amount must be less than max bet');
+
+      // Try to set min bet amount greater than max bet amount
+      await expect(
+        Dice.write.setMinBetAmount([maxBetAmount + 1n], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Min bet amount must be less than max bet');
+    });
+
+    it('Should allow owners multisig to set maximum bet amount', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const initialMaxBetAmount = await Dice.read.maxBetAmount();
+      const newMaxBetAmount = initialMaxBetAmount + parseEther('1');
+
+      await Dice.write.setMaxBetAmount([newMaxBetAmount], {
+        account: ownersMultisig.address,
+      });
+
+      const updatedMaxBetAmount = await Dice.read.maxBetAmount();
+      expect(updatedMaxBetAmount).to.equal(newMaxBetAmount);
+    });
+
+    it('Should prevent setting invalid maximum bet amount', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const minBetAmount = await Dice.read.minBetAmount();
+
+      // Try to set max bet amount equal to min bet amount
+      await expect(
+        Dice.write.setMaxBetAmount([minBetAmount], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Max bet amount must be greater than min bet');
+
+      // Try to set max bet amount less than min bet amount
+      await expect(
+        Dice.write.setMaxBetAmount([minBetAmount - 1n], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('Max bet amount must be greater than min bet');
+    });
+
+    it('Should allow owners multisig to set house edge', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      const initialHouseEdge = await Dice.read.houseEdge();
+      const newHouseEdge = initialHouseEdge + 5;
+
+      await Dice.write.setHouseEdge([newHouseEdge], {
+        account: ownersMultisig.address,
+      });
+
+      const updatedHouseEdge = await Dice.read.houseEdge();
+      expect(updatedHouseEdge).to.equal(newHouseEdge);
+    });
+
+    it('Should prevent setting invalid house edge', async function () {
+      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+
+      await expect(
+        Dice.write.setHouseEdge([51], {
+          account: ownersMultisig.address,
+        }),
+      ).to.be.rejectedWith('House edge must be less than or equal to 50');
+    });
+
+    it('Should prevent non-owners from changing configuration', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+
+      await expect(
+        Dice.write.setMinBetValue([5], {
+          account: user.account.address,
+        }),
+      ).to.be.rejected;
+
+      await expect(
+        Dice.write.setMaxBetValue([95], {
+          account: user.account.address,
+        }),
+      ).to.be.rejected;
+
+      await expect(
+        Dice.write.setMinBetAmount([parseEther('0.002')], {
+          account: user.account.address,
+        }),
+      ).to.be.rejected;
+
+      await expect(
+        Dice.write.setMaxBetAmount([parseEther('2')], {
+          account: user.account.address,
+        }),
+      ).to.be.rejected;
+
+      await expect(
+        Dice.write.setHouseEdge([15], {
+          account: user.account.address,
+        }),
+      ).to.be.rejected;
+    });
   });
 });
