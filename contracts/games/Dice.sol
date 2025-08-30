@@ -4,21 +4,30 @@ pragma solidity 0.8.28;
 import { IVRFCoordinatorV2Plus } from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
 import { VRFConsumerBaseV2Plus } from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import { VRFV2PlusClient } from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { IGame } from "../_interfaces/games/IGame.sol";
+import { IAccessRoles } from "../_interfaces/access/IAccessRoles.sol";
 
 /**
  * @title Dice Contract
  * @notice A contract that provides a dice roll function using Chainlink VRF v2.5 for randomness
  * @dev Returns a random number between 1 and 100 (inclusive) and allows betting
+ * @dev Implements UUPS upgradeable pattern
  */
-contract Dice is VRFConsumerBaseV2Plus {
-    IVRFCoordinatorV2Plus private immutable coordinator;
-    uint256 private immutable subscriptionId;
-    bytes32 private immutable keyHash;
-    uint32 private immutable callbackGasLimit;
-    uint16 private immutable requestConfirmations;
-    uint256 public constant MIN_BET = 0.001 ether;
-    uint256 public constant MAX_BET = 1 ether;
-    uint256 public constant HOUSE_EDGE = 10;
+contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
+    uint256 private subscriptionId;
+    bytes32 private keyHash;
+    uint32 private callbackGasLimit;
+    uint16 private requestConfirmations;
+    IAccessRoles private accessRoles;
+    bool public isPaused;
+    uint8 public minBetValue;
+    uint8 public maxBetValue;
+    uint256 public minBetAmount;
+    uint256 public maxBetAmount;
+    uint8 public houseEdge;
+
     enum ComparisonType {
         GREATER_THAN,
         LESS_THAN
@@ -67,23 +76,74 @@ contract Dice is VRFConsumerBaseV2Plus {
     error InvalidBetAmount();
     error InvalidTargetNumber();
     error InsufficientContractBalance();
+    error GameIsPaused();
+
+    event GamePaused(address indexed pauser);
+    event GameUnpaused(address indexed unpauser);
 
     /**
-     * @notice Constructor initializes the Dice contract with Chainlink VRF parameters
+     * @notice Constructor that disables initializers
+     * @param _vrfCoordinator The address of the VRF Coordinator
+     */
+    constructor(address _vrfCoordinator) VRFConsumerBaseV2Plus(_vrfCoordinator) {
+        _disableInitializers();
+    }
+
+    /**
+     * @notice Initializes the Dice contract with Chainlink VRF parameters
      * @param _vrfCoordinator The address of the VRF Coordinator
      * @param _subscriptionId The ID of the VRF subscription
      * @param _keyHash The gas lane key hash
+     * @param _accessRoles The address of the AccessRoles contract
+     * @param _minBetValue The minimum target number value allowed in the game (from 1)
+     * @param _maxBetValue The maximum target number value allowed in the game (up to 100)
+     * @param _minBetAmount The minimum bet amount allowed in the game (in wei)
+     * @param _maxBetAmount The maximum bet amount allowed in the game (in wei)
+     * @param _houseEdge The house edge percentage (e.g., 10 for 10%)
      */
-    constructor(
+    function initialize(
         address _vrfCoordinator,
         uint256 _subscriptionId,
-        bytes32 _keyHash
-    ) VRFConsumerBaseV2Plus(_vrfCoordinator) {
-        coordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
+        bytes32 _keyHash,
+        address _accessRoles,
+        uint8 _minBetValue,
+        uint8 _maxBetValue,
+        uint256 _minBetAmount,
+        uint256 _maxBetAmount,
+        uint8 _houseEdge
+    ) external initializer {
+        require(_vrfCoordinator != address(0), "_vrfCoordinator is zero!");
+        require(_accessRoles != address(0), "_accessRoles is zero!");
+        require(_houseEdge <= 50, "House edge must be less than or equal to 50");
+        require(_minBetAmount > 0, "Min bet amount must be greater than 0");
+        require(_minBetAmount < _maxBetAmount, "Min bet amount must be less than max bet");
+        require(_maxBetAmount > _minBetAmount, "Max bet amount must be greater than min bet");
+        require(_minBetValue > 0, "Min bet value must be greater than 0");
+        require(_minBetValue < _maxBetValue, "Min bet value must be less than max bet");
+        require(_maxBetValue <= 100, "Max bet value must be less or equals to 100");
+        require(_maxBetValue > _minBetValue, "Max bet value must be greater than min bet");
+        __UUPSUpgradeable_init();
+
+        s_vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
         subscriptionId = _subscriptionId;
         keyHash = _keyHash;
         callbackGasLimit = 100000;
         requestConfirmations = 3;
+        accessRoles = IAccessRoles(_accessRoles);
+        isPaused = false;
+        minBetValue = _minBetValue;
+        maxBetValue = _maxBetValue;
+        minBetAmount = _minBetAmount;
+        maxBetAmount = _maxBetAmount;
+        houseEdge = _houseEdge;
+    }
+
+    /**
+     * @notice Authorizes an upgrade to a new implementation
+     * @dev Only the owners multisig can upgrade the contract
+     */
+    function _authorizeUpgrade(address) internal view override {
+        accessRoles.requireOwnersMultisig(msg.sender);
     }
 
     /**
@@ -97,22 +157,23 @@ contract Dice is VRFConsumerBaseV2Plus {
     fallback() external payable {}
 
     /**
-     * @notice Request a random dice roll with a bet
-     * @dev Initiates a request to Chainlink VRF for random words and places a bet
-     * @param targetNumber The number to compare the roll result against (10-100, in steps of 10)
-     * @param comparisonType The type of comparison (GREATER_THAN, LESS_THAN)
-     * @return requestId The ID of the VRF request
+     * @notice Initiates a dice roll with a bet and requests randomness from Chainlink VRF
+     * @dev Validates bet amount and target number, stores the bet, and sends a VRF request
+     * @param targetNumber The number to compare the roll result against (must be between minBetValue and maxBetValue)
+     * @param comparisonType The type of comparison for the bet: GREATER_THAN or LESS_THAN
+     * @return requestId The ID of the Chainlink VRF request associated with this dice roll
      */
     function roll(
         uint256 targetNumber,
         ComparisonType comparisonType
     ) external payable returns (uint256) {
+        if (isPaused) revert GameIsPaused();
+
         if (rollResults[msg.sender] == type(uint256).max) revert RollInProgress();
 
-        if (msg.value < MIN_BET || msg.value > MAX_BET) revert InvalidBetAmount();
+        if (msg.value < minBetAmount || msg.value > maxBetAmount) revert InvalidBetAmount();
 
-        if (targetNumber < 10 || targetNumber > 100 || targetNumber % 10 != 0)
-            revert InvalidTargetNumber();
+        if (targetNumber < minBetValue || targetNumber > maxBetValue) revert InvalidTargetNumber();
 
         uint256 payout = calculatePayout(msg.value, targetNumber, comparisonType);
 
@@ -142,7 +203,7 @@ contract Dice is VRFConsumerBaseV2Plus {
             )
         });
 
-        uint256 requestId = coordinator.requestRandomWords(request);
+        uint256 requestId = s_vrfCoordinator.requestRandomWords(request);
 
         requestIdToSender[requestId] = msg.sender;
 
@@ -157,7 +218,7 @@ contract Dice is VRFConsumerBaseV2Plus {
      * @notice Calculate the potential payout for a bet
      * @dev Calculates payout based on the odds of winning and dynamic house edge
      * @param betAmount The amount of the bet
-     * @param targetNumber The number to compare the roll result against (10-100, in steps of 10)
+     * @param targetNumber The number to compare the roll result against (between minBetValue and maxBetValue)
      * @param comparisonType The type of comparison (GREATER_THAN, LESS_THAN)
      * @return The potential payout amount
      */
@@ -165,21 +226,20 @@ contract Dice is VRFConsumerBaseV2Plus {
         uint256 betAmount,
         uint256 targetNumber,
         ComparisonType comparisonType
-    ) public pure returns (uint256) {
+    ) public view returns (uint256) {
         uint256 probability;
 
         if (comparisonType == ComparisonType.GREATER_THAN) {
             probability = 100 - targetNumber;
-            if (probability == 0) revert InvalidTargetNumber();
         } else {
-            // LESS_THAN
-            if (targetNumber <= 10) revert InvalidTargetNumber();
             probability = targetNumber - 1;
         }
 
-        uint256 dynamicHouseEdge = HOUSE_EDGE + (probability * 15) / 100;
+        if (probability == 0) revert InvalidTargetNumber();
 
-        if (dynamicHouseEdge < HOUSE_EDGE) dynamicHouseEdge = HOUSE_EDGE;
+        uint256 dynamicHouseEdge = houseEdge + (probability * 15) / 100;
+
+        if (dynamicHouseEdge < houseEdge) dynamicHouseEdge = houseEdge;
 
         uint256 multiplier = (100 * (100 - dynamicHouseEdge)) / probability;
 
@@ -189,18 +249,18 @@ contract Dice is VRFConsumerBaseV2Plus {
     /**
      * @notice Callback function used by Chainlink VRF to deliver random words
      * @dev Processes the random words, calculates the dice roll result, and settles the bet
-     * @param _requestId The ID of the request
-     * @param _randomWords The random words generated by Chainlink VRF
+     * @param requestId The ID of the request
+     * @param randomWords The random words generated by Chainlink VRF
      */
     function fulfillRandomWords(
-        uint256 _requestId,
-        uint256[] calldata _randomWords
+        uint256 requestId,
+        uint256[] calldata randomWords
     ) internal override {
-        address roller = requestIdToSender[_requestId];
+        address roller = requestIdToSender[requestId];
 
-        Bet storage bet = requestIdToBet[_requestId];
+        Bet storage bet = requestIdToBet[requestId];
 
-        uint256 result = (_randomWords[0] % 100) + 1;
+        uint256 result = (randomWords[0] % 100) + 1;
 
         rollResults[roller] = result;
 
@@ -209,7 +269,6 @@ contract Dice is VRFConsumerBaseV2Plus {
         if (bet.comparisonType == ComparisonType.GREATER_THAN) {
             won = result > bet.targetNumber;
         } else {
-            // LESS_THAN
             won = result < bet.targetNumber;
         }
 
@@ -223,7 +282,7 @@ contract Dice is VRFConsumerBaseV2Plus {
             require(success, "Transfer failed");
         }
 
-        emit DiceRollFulfilled(_requestId, roller, result, won, won ? bet.payout : 0);
+        emit DiceRollFulfilled(requestId, roller, result, won, won ? bet.payout : 0);
         emit BetSettled(
             roller,
             bet.amount,
@@ -293,15 +352,93 @@ contract Dice is VRFConsumerBaseV2Plus {
     }
 
     /**
-     * @notice Withdraw funds from the contract (owner only)
-     * @dev Allows the owner to withdraw funds from the contract
+     * @notice Pauses the game
+     * @dev Only the owners multisig can pause the game
+     */
+    function pause() external {
+        accessRoles.requireOwnersMultisig(msg.sender);
+        isPaused = true;
+        emit GamePaused(msg.sender);
+    }
+
+    /**
+     * @notice Unpauses the game
+     * @dev Only the owners multisig can unpause the game
+     */
+    function unpause() external {
+        accessRoles.requireOwnersMultisig(msg.sender);
+        isPaused = false;
+        emit GameUnpaused(msg.sender);
+    }
+
+    /**
+     * @notice Withdraw funds from the contract (owners multisig only)
+     * @dev Allows the owners multisig to withdraw funds from the contract
      * @param amount The amount to withdraw
      */
     function withdraw(uint256 amount) external {
-        // For simplicity, we're not implementing access control in this example
+        accessRoles.requireOwnersMultisig(msg.sender);
         require(amount <= address(this).balance, "Insufficient contract balance");
 
         (bool success, ) = payable(msg.sender).call{ value: amount }("");
         require(success, "Transfer failed");
+    }
+
+    /**
+     * @notice Sets the minimum target number value (owners multisig only)
+     * @dev Allows the owners multisig to update the minimum target number value
+     * @param newMinBetValue The new minimum target number value
+     */
+    function setMinBetValue(uint256 newMinBetValue) external {
+        accessRoles.requireOwnersMultisig(msg.sender);
+        require(newMinBetValue > 0, "Min bet value must be greater than 0");
+        require(newMinBetValue < maxBetValue, "Min bet value must be less than max bet");
+        minBetValue = newMinBetValue;
+    }
+
+    /**
+     * @notice Sets the maximum target number value (owners multisig only)
+     * @dev Allows the owners multisig to update the maximum target number value
+     * @param newMaxBetValue The new maximum target number value
+     */
+    function setMaxBetValue(uint256 newMaxBetValue) external {
+        accessRoles.requireOwnersMultisig(msg.sender);
+        require(newMaxBetValue <= 100, "Max bet value must be less or equals to 100");
+        require(newMaxBetValue > minBetValue, "Max bet value must be greater than min bet");
+        maxBetValue = newMaxBetValue;
+    }
+
+    /**
+     * @notice Sets the minimum bet amount (owners multisig only)
+     * @dev Allows the owners multisig to update the minimum bet amount
+     * @param newMinBetAmount The new minimum bet amount
+     */
+    function setMinBetAmount(uint256 newMinBetAmount) external {
+        accessRoles.requireOwnersMultisig(msg.sender);
+        require(newMinBetAmount > 0, "Min bet amount must be greater than 0");
+        require(newMinBetAmount < maxBetAmount, "Min bet amount must be less than max bet");
+        minBetAmount = newMinBetAmount;
+    }
+
+    /**
+     * @notice Sets the maximum bet amount (owners multisig only)
+     * @dev Allows the owners multisig to update the maximum bet amount
+     * @param newMaxBetAmount The new maximum bet amount
+     */
+    function setMaxBetAmount(uint256 newMaxBetAmount) external {
+        accessRoles.requireOwnersMultisig(msg.sender);
+        require(newMaxBetAmount > minBetAmount, "Max bet amount must be greater than min bet");
+        maxBetAmount = newMaxBetAmount;
+    }
+
+    /**
+     * @notice Sets the house edge percentage (owners multisig only)
+     * @dev Allows the owners multisig to update the house edge percentage
+     * @param newHouseEdge The new house edge percentage
+     */
+    function setHouseEdge(uint8 newHouseEdge) external {
+        accessRoles.requireOwnersMultisig(msg.sender);
+        require(newHouseEdge <= 50, "House edge must be less than or equal to 50");
+        houseEdge = newHouseEdge;
     }
 }
