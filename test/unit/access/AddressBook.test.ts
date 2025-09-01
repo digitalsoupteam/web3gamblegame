@@ -57,6 +57,18 @@ describe('AddressBook Contract', function () {
     ]);
     const addressBook = await hre.viem.getContractAt('AddressBook', addressBookProxy.address);
 
+    const gameManagerImpl = await hre.viem.deployContract('GameManager');
+    const gameManagerInitData = encodeFunctionData({
+      abi: gameManagerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address],
+    });
+    const gameManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      gameManagerImpl.address,
+      gameManagerInitData,
+    ]);
+    const gameManager = await hre.viem.getContractAt('GameManager', gameManagerProxy.address);
+
     for (const owner of [owner1, owner2]) {
       const isSigner = await ownersMultisig.read.signers([owner.account.address]);
       expect(isSigner).to.be.true;
@@ -69,11 +81,76 @@ describe('AddressBook Contract', function () {
       mockUSDC,
       ownersMultisig,
       addressBook,
+      accessRoles,
+      gameManager,
       owners,
       administrator,
       user,
+      deployer,
+      owner1,
+      owner2,
     };
   }
+
+  describe('GameManager functionality', function () {
+    it('Should allow deployer to set GameManager', async function () {
+      const { addressBook, gameManager, deployer } = await loadFixture(deployAddressBookFixture);
+
+      await addressBook.write.initialSetGameManager([gameManager.address], {
+        account: deployer.account.address,
+      });
+
+      const registeredGameManager = await addressBook.read.gameManager();
+      expect(getAddress(registeredGameManager)).to.equal(getAddress(gameManager.address));
+    });
+
+    it('Should revert if non-deployer tries to set GameManager', async function () {
+      const { addressBook, gameManager, user, owner1, administrator } =
+        await loadFixture(deployAddressBookFixture);
+
+      await expect(
+        addressBook.write.initialSetGameManager([gameManager.address], {
+          account: user.account.address,
+        }),
+      ).to.be.rejectedWith('only deployer!');
+
+      await expect(
+        addressBook.write.initialSetGameManager([gameManager.address], {
+          account: administrator.account.address,
+        }),
+      ).to.be.rejectedWith('only deployer!');
+
+      await expect(
+        addressBook.write.initialSetGameManager([gameManager.address], {
+          account: owner1.account.address,
+        }),
+      ).to.be.rejectedWith('only deployer!');
+    });
+
+    it('Should revert if trying to set GameManager to zero address', async function () {
+      const { addressBook, deployer } = await loadFixture(deployAddressBookFixture);
+
+      await expect(
+        addressBook.write.initialSetGameManager([zeroAddress], {
+          account: deployer.account.address,
+        }),
+      ).to.be.rejectedWith('_gameManager is zero!');
+    });
+
+    it('Should revert if trying to set GameManager more than once', async function () {
+      const { addressBook, gameManager, deployer } = await loadFixture(deployAddressBookFixture);
+
+      await addressBook.write.initialSetGameManager([gameManager.address], {
+        account: deployer.account.address,
+      });
+
+      await expect(
+        addressBook.write.initialSetGameManager([gameManager.address], {
+          account: deployer.account.address,
+        }),
+      ).to.be.rejectedWith('gameManager contract exists!');
+    });
+  });
 
   describe('Upgrade functionality', function () {
     it('Should allow owners to upgrade the contract', async function () {
