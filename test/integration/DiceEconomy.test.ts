@@ -14,7 +14,7 @@
 import { expect } from 'chai';
 import hre from 'hardhat';
 import { encodeFunctionData, getAddress, parseEther } from 'viem';
-import { loadFixture, setBalance } from '@nomicfoundation/hardhat-toolbox-viem/network-helpers';
+import { loadFixture, setBalance, impersonateAccount } from '@nomicfoundation/hardhat-toolbox-viem/network-helpers';
 import fs from 'fs';
 import path from 'path';
 
@@ -51,6 +51,37 @@ describe('Dice Contract Economy Test', function () {
     ]);
     const accessRoles = await hre.viem.getContractAt('AccessRoles', accessRolesProxy.address);
 
+    // Deploy AddressBook
+    const addressBookImpl = await hre.viem.deployContract('AddressBook');
+    const addressBookInitData = encodeFunctionData({
+      abi: addressBookImpl.abi,
+      functionName: 'initialize',
+      args: [accessRoles.address],
+    });
+    const addressBookProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      addressBookImpl.address,
+      addressBookInitData,
+    ]);
+    const addressBook = await hre.viem.getContractAt('AddressBook', addressBookProxy.address);
+
+    // Deploy GameManager
+    const gameManagerImpl = await hre.viem.deployContract('GameManager');
+    const gameManagerInitData = encodeFunctionData({
+      abi: gameManagerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address],
+    });
+    const gameManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      gameManagerImpl.address,
+      gameManagerInitData,
+    ]);
+    const gameManager = await hre.viem.getContractAt('GameManager', gameManagerProxy.address);
+
+    // Set GameManager in AddressBook
+    await addressBook.write.initialSetGameManager([gameManager.address], {
+      account: deployer.account.address,
+    });
+
     const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
 
     const DiceImpl = await hre.viem.deployContract('Dice', [MockVRFCoordinator.address]);
@@ -61,7 +92,7 @@ describe('Dice Contract Economy Test', function () {
         MockVRFCoordinator.address,
         1n,
         '0x8af398995b04c28e9a51adb9721ef74c74f93e6a478f39e7e0777be13527e7ef',
-        accessRoles.address,
+        addressBook.address,
         1,
         100,
         parseEther('0.001'),
@@ -76,6 +107,15 @@ describe('Dice Contract Economy Test', function () {
     const Dice = await hre.viem.getContractAt('Dice', DiceProxy.address);
 
     setBalance(Dice.address, parseEther('100'));
+
+    // Impersonate ownersMultisig to register Dice in GameManager
+    await impersonateAccount(ownersMultisig.address);
+    await setBalance(ownersMultisig.address, parseEther('100'));
+
+    // Register Dice in GameManager
+    await gameManager.write.addGame([Dice.address], {
+      account: ownersMultisig.address,
+    });
 
     return { Dice, MockVRFCoordinator, user };
   }

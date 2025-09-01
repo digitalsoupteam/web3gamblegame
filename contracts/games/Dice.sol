@@ -7,7 +7,8 @@ import { VRFV2PlusClient } from "@chainlink/contracts/src/v0.8/vrf/dev/libraries
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { IGame } from "../_interfaces/games/IGame.sol";
-import { IAccessRoles } from "../_interfaces/access/IAccessRoles.sol";
+import { IAddressBook } from "../_interfaces/access/IAddressBook.sol";
+import { AddressBook } from "../access/AddressBook.sol";
 
 /**
  * @title Dice Contract
@@ -20,7 +21,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
     bytes32 private keyHash;
     uint32 private callbackGasLimit;
     uint16 private requestConfirmations;
-    IAccessRoles private accessRoles;
+    IAddressBook private addressBook;
     bool public isPaused;
     uint8 public minBetValue;
     uint8 public maxBetValue;
@@ -94,7 +95,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @param _vrfCoordinator The address of the VRF Coordinator
      * @param _subscriptionId The ID of the VRF subscription
      * @param _keyHash The gas lane key hash
-     * @param _accessRoles The address of the AccessRoles contract
+     * @param _addressBook The address of the AddressBook contract
      * @param _minBetValue The minimum target number value allowed in the game (from 1)
      * @param _maxBetValue The maximum target number value allowed in the game (up to 100)
      * @param _minBetAmount The minimum bet amount allowed in the game (in wei)
@@ -105,7 +106,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         address _vrfCoordinator,
         uint256 _subscriptionId,
         bytes32 _keyHash,
-        address _accessRoles,
+        address _addressBook,
         uint8 _minBetValue,
         uint8 _maxBetValue,
         uint256 _minBetAmount,
@@ -113,7 +114,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         uint8 _houseEdge
     ) external initializer {
         require(_vrfCoordinator != address(0), "_vrfCoordinator is zero!");
-        require(_accessRoles != address(0), "_accessRoles is zero!");
+        require(_addressBook != address(0), "_addressBook is zero!");
         require(_houseEdge <= 50, "House edge must be less than or equal to 50");
         require(_minBetAmount > 0, "Min bet amount must be greater than 0");
         require(_minBetAmount < _maxBetAmount, "Min bet amount must be less than max bet");
@@ -129,7 +130,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         keyHash = _keyHash;
         callbackGasLimit = 100000;
         requestConfirmations = 3;
-        accessRoles = IAccessRoles(_accessRoles);
+        addressBook = IAddressBook(_addressBook);
         isPaused = false;
         minBetValue = _minBetValue;
         maxBetValue = _maxBetValue;
@@ -143,7 +144,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @dev Only the owners multisig can upgrade the contract
      */
     function _authorizeUpgrade(address) internal view override {
-        accessRoles.requireOwnersMultisig(msg.sender);
+        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
     }
 
     /**
@@ -167,12 +168,13 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         uint256 targetNumber,
         ComparisonType comparisonType
     ) external payable returns (uint256) {
+        require(
+            addressBook.gameManager().isGameExist(address(this)),
+            "Game doesn't exist in GameManager"
+        );
         if (isPaused) revert GameIsPaused();
-
         if (rollResults[msg.sender] == type(uint256).max) revert RollInProgress();
-
         if (msg.value < minBetAmount || msg.value > maxBetAmount) revert InvalidBetAmount();
-
         if (targetNumber < minBetValue || targetNumber > maxBetValue) revert InvalidTargetNumber();
 
         uint256 payout = calculatePayout(msg.value, targetNumber, comparisonType);
@@ -356,7 +358,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @dev Only the owners multisig can pause the game
      */
     function pause() external {
-        accessRoles.requireOwnersMultisig(msg.sender);
+        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
         isPaused = true;
         emit GamePaused(msg.sender);
     }
@@ -366,7 +368,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @dev Only the owners multisig can unpause the game
      */
     function unpause() external {
-        accessRoles.requireOwnersMultisig(msg.sender);
+        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
         isPaused = false;
         emit GameUnpaused(msg.sender);
     }
@@ -390,7 +392,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @param newMinBetValue The new minimum target number value
      */
     function setMinBetValue(uint8 newMinBetValue) external {
-        accessRoles.requireOwnersMultisig(msg.sender);
+        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
         require(newMinBetValue > 0, "Min bet value must be greater than 0");
         require(newMinBetValue < maxBetValue, "Min bet value must be less than max bet");
         minBetValue = newMinBetValue;
@@ -402,7 +404,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @param newMaxBetValue The new maximum target number value
      */
     function setMaxBetValue(uint8 newMaxBetValue) external {
-        accessRoles.requireOwnersMultisig(msg.sender);
+        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
         require(newMaxBetValue <= 100, "Max bet value must be less or equals to 100");
         require(newMaxBetValue > minBetValue, "Max bet value must be greater than min bet");
         maxBetValue = newMaxBetValue;
@@ -414,7 +416,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @param newMinBetAmount The new minimum bet amount
      */
     function setMinBetAmount(uint256 newMinBetAmount) external {
-        accessRoles.requireOwnersMultisig(msg.sender);
+        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
         require(newMinBetAmount > 0, "Min bet amount must be greater than 0");
         require(newMinBetAmount < maxBetAmount, "Min bet amount must be less than max bet");
         minBetAmount = newMinBetAmount;
@@ -426,7 +428,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @param newMaxBetAmount The new maximum bet amount
      */
     function setMaxBetAmount(uint256 newMaxBetAmount) external {
-        accessRoles.requireOwnersMultisig(msg.sender);
+        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
         require(newMaxBetAmount > minBetAmount, "Max bet amount must be greater than min bet");
         maxBetAmount = newMaxBetAmount;
     }
@@ -437,7 +439,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @param newHouseEdge The new house edge percentage
      */
     function setHouseEdge(uint8 newHouseEdge) external {
-        accessRoles.requireOwnersMultisig(msg.sender);
+        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
         require(newHouseEdge <= 50, "House edge must be less than or equal to 50");
         houseEdge = newHouseEdge;
     }

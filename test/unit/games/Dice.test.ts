@@ -44,6 +44,34 @@ describe('Dice Contract', function () {
     ]);
     const accessRoles = await hre.viem.getContractAt('AccessRoles', accessRolesProxy.address);
 
+    const addressBookImpl = await hre.viem.deployContract('AddressBook');
+    const addressBookInitData = encodeFunctionData({
+      abi: addressBookImpl.abi,
+      functionName: 'initialize',
+      args: [accessRoles.address],
+    });
+    const addressBookProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      addressBookImpl.address,
+      addressBookInitData,
+    ]);
+    const addressBook = await hre.viem.getContractAt('AddressBook', addressBookProxy.address);
+
+    const gameManagerImpl = await hre.viem.deployContract('GameManager');
+    const gameManagerInitData = encodeFunctionData({
+      abi: gameManagerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address],
+    });
+    const gameManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      gameManagerImpl.address,
+      gameManagerInitData,
+    ]);
+    const gameManager = await hre.viem.getContractAt('GameManager', gameManagerProxy.address);
+
+    await addressBook.write.initialSetGameManager([gameManager.address], {
+      account: deployer.account.address,
+    });
+
     const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
     const DiceImpl = await hre.viem.deployContract('Dice', [MockVRFCoordinator.address]);
     const diceInitData = encodeFunctionData({
@@ -53,7 +81,7 @@ describe('Dice Contract', function () {
         MockVRFCoordinator.address,
         1n,
         '0x8af398995b04c28e9a51adb9721ef74c74f93e6a478f39e7e0777be13527e7ef',
-        accessRoles.address,
+        addressBook.address,
         1,
         100,
         parseEther('0.001'),
@@ -68,6 +96,10 @@ describe('Dice Contract', function () {
     const Dice = await hre.viem.getContractAt('Dice', DiceProxy.address);
     await setBalance(Dice.address, parseEther('100'));
 
+    await gameManager.write.addGame([Dice.address], {
+      account: ownersMultisig.address,
+    });
+
     for (const owner of [owner1, owner2]) {
       const isSigner = await ownersMultisig.read.signers([owner.account.address]);
       expect(isSigner).to.be.true;
@@ -80,11 +112,14 @@ describe('Dice Contract', function () {
       Dice,
       MockVRFCoordinator,
       accessRoles,
+      addressBook,
+      gameManager,
       ownersMultisig,
       administrator,
       user,
       owner1,
       owner2,
+      deployer,
     };
   }
 
@@ -92,6 +127,13 @@ describe('Dice Contract', function () {
     it('Should deploy successfully', async function () {
       const { Dice } = await loadFixture(deployDiceFixture);
       expect(Dice.address).to.not.equal(0);
+    });
+
+    it('Should be registered in GameManager', async function () {
+      const { Dice, gameManager } = await loadFixture(deployDiceFixture);
+
+      const isRegistered = await gameManager.read.isGameExist([Dice.address]);
+      expect(isRegistered).to.be.true;
     });
   });
 
@@ -119,6 +161,43 @@ describe('Dice Contract', function () {
       if (!roller) throw new Error('roller is undefined');
 
       expect(getAddress(roller)).to.equal(getAddress(user.account.address));
+    });
+
+    it('Should revert if the game is not registered in GameManager', async function () {
+      const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
+      const { user, addressBook } = await loadFixture(deployDiceFixture);
+
+      const UnregisteredDiceImpl = await hre.viem.deployContract('Dice', [
+        MockVRFCoordinator.address,
+      ]);
+      const diceInitData = encodeFunctionData({
+        abi: UnregisteredDiceImpl.abi,
+        functionName: 'initialize',
+        args: [
+          MockVRFCoordinator.address,
+          1n,
+          '0x8af398995b04c28e9a51adb9721ef74c74f93e6a478f39e7e0777be13527e7ef',
+          addressBook.address,
+          1,
+          100,
+          parseEther('0.001'),
+          parseEther('1'),
+          10,
+        ],
+      });
+      const UnregisteredDiceProxy = await hre.viem.deployContract('ERC1967Proxy', [
+        UnregisteredDiceImpl.address,
+        diceInitData,
+      ]);
+      const UnregisteredDice = await hre.viem.getContractAt('Dice', UnregisteredDiceProxy.address);
+      await setBalance(UnregisteredDice.address, parseEther('100'));
+
+      await expect(
+        UnregisteredDice.write.roll([50n, 0], {
+          account: user.account.address,
+          value: 1000000000000000n,
+        }),
+      ).to.be.rejectedWith("Game doesn't exist in GameManager");
     });
 
     it('Should revert if a roll is already in progress', async function () {
@@ -179,14 +258,12 @@ describe('Dice Contract', function () {
       const { Dice, user } = await loadFixture(deployDiceFixture);
       const betAmount = 1000000000000000n;
 
-      // For GREATER_THAN with targetNumber 100, probability is 0
       await expect(
         Dice.read.calculatePayout([betAmount, 100n, 0], {
           account: user.account.address,
         }),
       ).to.be.rejectedWith('InvalidTargetNumber');
 
-      // For LESS_THAN with targetNumber 1, probability is 0
       await expect(
         Dice.read.calculatePayout([betAmount, 1n, 1], {
           account: user.account.address,
@@ -231,7 +308,6 @@ describe('Dice Contract', function () {
       expect(bet[3]).to.be.false;
       expect(bet[4]).to.be.false;
 
-      // Verify payout matches calculation
       const calculatedPayout = await Dice.read.calculatePayout(
         [betAmount, targetNumber, comparisonType],
         {
@@ -352,13 +428,9 @@ describe('Dice Contract', function () {
 
       const randomWord = 26n;
       const randomWords = [randomWord];
-      try {
-        await MockVRFCoordinator.write.fulfillRandomWords([Dice.address, randomWords], {
-          account: user.account.address,
-        });
-      } catch (err) {
-        // console.error(err);
-      }
+      await MockVRFCoordinator.write.fulfillRandomWords([Dice.address, randomWords], {
+        account: user.account.address,
+      });
 
       const result = await Dice.read.getLatestRollResult({
         account: user.account.address,
@@ -411,16 +483,13 @@ describe('Dice Contract', function () {
     it('Should allow owners multisig to pause the game', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
 
-      // Initially the game should not be paused
       const initialPauseState = await Dice.read.isPaused();
       expect(initialPauseState).to.be.false;
 
-      // Pause the game
       await Dice.write.pause({
         account: ownersMultisig.address,
       });
 
-      // Verify the game is paused
       const pausedState = await Dice.read.isPaused();
       expect(pausedState).to.be.true;
     });
@@ -476,21 +545,17 @@ describe('Dice Contract', function () {
     it('Should allow owners multisig to unpause the game', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
 
-      // Pause the game first
       await Dice.write.pause({
         account: ownersMultisig.address,
       });
 
-      // Verify the game is paused
       const pausedState = await Dice.read.isPaused();
       expect(pausedState).to.be.true;
 
-      // Unpause the game
       await Dice.write.unpause({
         account: ownersMultisig.address,
       });
 
-      // Verify the game is unpaused
       const unpausedState = await Dice.read.isPaused();
       expect(unpausedState).to.be.false;
     });
@@ -498,7 +563,6 @@ describe('Dice Contract', function () {
     it('Should emit GameUnpaused event when unpaused', async function () {
       const { Dice, ownersMultisig, publicClient } = await loadFixture(deployDiceFixture);
 
-      // Pause the game first
       await Dice.write.pause({
         account: ownersMultisig.address,
       });
@@ -526,7 +590,6 @@ describe('Dice Contract', function () {
     it('Should prevent non-owners from unpausing the game', async function () {
       const { Dice, ownersMultisig, user } = await loadFixture(deployDiceFixture);
 
-      // Pause the game first
       await Dice.write.pause({
         account: ownersMultisig.address,
       });
@@ -647,21 +710,18 @@ describe('Dice Contract', function () {
 
       const minBetValue = await Dice.read.minBetValue();
 
-      // Try to set max bet value greater than 100
       await expect(
         Dice.write.setMaxBetValue([101], {
           account: ownersMultisig.address,
         }),
       ).to.be.rejectedWith('Max bet value must be less or equals to 100');
 
-      // Try to set max bet value equal to min bet value
       await expect(
         Dice.write.setMaxBetValue([minBetValue], {
           account: ownersMultisig.address,
         }),
       ).to.be.rejectedWith('Max bet value must be greater than min bet');
 
-      // Try to set max bet value less than min bet value
       await expect(
         Dice.write.setMaxBetValue([minBetValue - 1], {
           account: ownersMultisig.address,
@@ -688,21 +748,18 @@ describe('Dice Contract', function () {
 
       const maxBetAmount = await Dice.read.maxBetAmount();
 
-      // Try to set min bet amount to 0
       await expect(
         Dice.write.setMinBetAmount([0n], {
           account: ownersMultisig.address,
         }),
       ).to.be.rejectedWith('Min bet amount must be greater than 0');
 
-      // Try to set min bet amount equal to max bet amount
       await expect(
         Dice.write.setMinBetAmount([maxBetAmount], {
           account: ownersMultisig.address,
         }),
       ).to.be.rejectedWith('Min bet amount must be less than max bet');
 
-      // Try to set min bet amount greater than max bet amount
       await expect(
         Dice.write.setMinBetAmount([maxBetAmount + 1n], {
           account: ownersMultisig.address,
@@ -729,14 +786,12 @@ describe('Dice Contract', function () {
 
       const minBetAmount = await Dice.read.minBetAmount();
 
-      // Try to set max bet amount equal to min bet amount
       await expect(
         Dice.write.setMaxBetAmount([minBetAmount], {
           account: ownersMultisig.address,
         }),
       ).to.be.rejectedWith('Max bet amount must be greater than min bet');
 
-      // Try to set max bet amount less than min bet amount
       await expect(
         Dice.write.setMaxBetAmount([minBetAmount - 1n], {
           account: ownersMultisig.address,
