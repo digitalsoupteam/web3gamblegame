@@ -1,4 +1,7 @@
+import { parseEther } from 'viem';
+
 import { buildModule } from '@nomicfoundation/hardhat-ignition/modules';
+import addressBookModule from '../access/AddressBook';
 
 const VRF_COORDINATOR_ADDRESSES = {
   baseSepolia: '0x5C210eF41CD1a72de73bF76eC39637bB0d3d7BEE',
@@ -16,8 +19,8 @@ const KEY_HASHES = {
 };
 
 export default buildModule('DiceModule', m => {
+  const { addressBookProxy } = m.useModule(addressBookModule);
   const network = process.env.HARDHAT_NETWORK || 'hardhat';
-
   let vrfCoordinatorAddress;
 
   if (network === 'hardhat') {
@@ -27,15 +30,17 @@ export default buildModule('DiceModule', m => {
       VRF_COORDINATOR_ADDRESSES[network as keyof typeof VRF_COORDINATOR_ADDRESSES];
   }
 
-  const impl = m.contract('Dice', [
-    vrfCoordinatorAddress,
-    SUBSCRIPTION_IDS[network as keyof typeof SUBSCRIPTION_IDS],
-    KEY_HASHES[network as keyof typeof KEY_HASHES],
-  ]);
+  const impl = m.contract('Dice', [vrfCoordinatorAddress]);
   const initData = m.encodeFunctionCall(impl, 'initialize', [
     vrfCoordinatorAddress,
     SUBSCRIPTION_IDS[network as keyof typeof SUBSCRIPTION_IDS],
     KEY_HASHES[network as keyof typeof KEY_HASHES],
+    addressBookProxy,
+    1,
+    100,
+    parseEther('0.001'),
+    parseEther('1'),
+    10,
   ]);
   const proxy = m.contract('ERC1967Proxy', [impl, initData]);
 
