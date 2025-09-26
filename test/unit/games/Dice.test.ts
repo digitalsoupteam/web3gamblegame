@@ -36,7 +36,7 @@ describe('Dice Contract', function () {
     const accessRolesInitData = encodeFunctionData({
       abi: accessRolesImpl.abi,
       functionName: 'initialize',
-      args: [ownersMultisig.address, []],
+      args: [ownersMultisig.address, [administrator.account.address]],
     });
     const accessRolesProxy = await hre.viem.deployContract('ERC1967Proxy', [
       accessRolesImpl.address,
@@ -100,6 +100,22 @@ describe('Dice Contract', function () {
       account: ownersMultisig.address,
     });
 
+    const pauseManagerImpl = await hre.viem.deployContract('PauseManager');
+    const pauseManagerInitData = encodeFunctionData({
+      abi: pauseManagerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address],
+    });
+    const pauseManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      pauseManagerImpl.address,
+      pauseManagerInitData,
+    ]);
+    const pauseManager = await hre.viem.getContractAt('PauseManager', pauseManagerProxy.address);
+
+    await addressBook.write.initialSetPauseManager([pauseManager.address], {
+      account: deployer.account.address,
+    });
+
     for (const owner of [owner1, owner2]) {
       const isSigner = await ownersMultisig.read.signers([owner.account.address]);
       expect(isSigner).to.be.true;
@@ -140,7 +156,6 @@ describe('Dice Contract', function () {
   describe('Roll Function', function () {
     it('Should emit DiceRollRequested event when roll is called', async function () {
       const { Dice, user } = await loadFixture(deployDiceFixture);
-
       const txHash = await Dice.write.roll([50n, 0], {
         account: user.account.address,
         value: 1000000000000000n,
@@ -166,7 +181,6 @@ describe('Dice Contract', function () {
     it('Should revert if the game is not registered in GameManager', async function () {
       const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
       const { user, addressBook } = await loadFixture(deployDiceFixture);
-
       const UnregisteredDiceImpl = await hre.viem.deployContract('Dice', [
         MockVRFCoordinator.address,
       ]);
@@ -479,59 +493,20 @@ describe('Dice Contract', function () {
       expect(events[0].args.result).to.equal(expectedResult);
     });
   });
-  describe('Admin Functions', function () {
-    it('Should allow owners multisig to pause the game', async function () {
-      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+  describe('Pause Integration', function () {
+    it('Should revert when PauseManager is paused', async function () {
+      const { Dice, user, administrator, addressBook } = await loadFixture(deployDiceFixture);
 
-      const initialPauseState = await Dice.read.isPaused();
-      expect(initialPauseState).to.be.false;
+      const pauseManagerAddress = await addressBook.read.pauseManager();
+      const pauseManager = await hre.viem.getContractAt('PauseManager', pauseManagerAddress);
 
-      await Dice.write.pause({
-        account: ownersMultisig.address,
-      });
+      const accessRolesAddress = await addressBook.read.accessRoles();
+      const accessRoles = await hre.viem.getContractAt('AccessRoles', accessRolesAddress);
 
-      const pausedState = await Dice.read.isPaused();
-      expect(pausedState).to.be.true;
-    });
+      await setBalance(administrator.account.address, parseEther('1'));
 
-    it('Should emit GamePaused event when paused', async function () {
-      const { Dice, ownersMultisig, publicClient } = await loadFixture(deployDiceFixture);
-
-      const txHash = await Dice.write.pause({
-        account: ownersMultisig.address,
-      });
-
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-      const events = await Dice.getEvents.GamePaused(
-        {
-          pauser: ownersMultisig.address,
-        },
-        {
-          blockHash: receipt.blockHash,
-        },
-      );
-
-      expect(events.length).to.equal(1);
-      const pauser = events[0].args.pauser;
-      if (!pauser) throw new Error('pauser is undefined');
-      expect(getAddress(pauser)).to.equal(getAddress(ownersMultisig.address));
-    });
-
-    it('Should prevent non-owners from pausing the game', async function () {
-      const { Dice, user } = await loadFixture(deployDiceFixture);
-
-      await expect(
-        Dice.write.pause({
-          account: user.account.address,
-        }),
-      ).to.be.rejected;
-    });
-
-    it('Should prevent betting when game is paused', async function () {
-      const { Dice, ownersMultisig, user } = await loadFixture(deployDiceFixture);
-
-      await Dice.write.pause({
-        account: ownersMultisig.address,
+      await pauseManager.write.pauseContract([Dice.address], {
+        account: administrator.account,
       });
 
       await expect(
@@ -539,124 +514,31 @@ describe('Dice Contract', function () {
           account: user.account.address,
           value: 1000000000000000n,
         }),
-      ).to.be.rejectedWith('GameIsPaused');
+      ).to.be.rejectedWith('paused!');
     });
 
-    it('Should allow owners multisig to unpause the game', async function () {
-      const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
+    it('Should revert when specific contract is paused in PauseManager', async function () {
+      const { Dice, user, administrator, addressBook } = await loadFixture(deployDiceFixture);
+      const pauseManagerAddress = await addressBook.read.pauseManager();
+      const pauseManager = await hre.viem.getContractAt('PauseManager', pauseManagerAddress);
 
-      await Dice.write.pause({
-        account: ownersMultisig.address,
-      });
-
-      const pausedState = await Dice.read.isPaused();
-      expect(pausedState).to.be.true;
-
-      await Dice.write.unpause({
-        account: ownersMultisig.address,
-      });
-
-      const unpausedState = await Dice.read.isPaused();
-      expect(unpausedState).to.be.false;
-    });
-
-    it('Should emit GameUnpaused event when unpaused', async function () {
-      const { Dice, ownersMultisig, publicClient } = await loadFixture(deployDiceFixture);
-
-      await Dice.write.pause({
-        account: ownersMultisig.address,
-      });
-
-      const txHash = await Dice.write.unpause({
-        account: ownersMultisig.address,
-      });
-
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-      const events = await Dice.getEvents.GameUnpaused(
-        {
-          unpauser: ownersMultisig.address,
-        },
-        {
-          blockHash: receipt.blockHash,
-        },
-      );
-
-      expect(events.length).to.equal(1);
-      const unpauser = events[0].args.unpauser;
-      if (!unpauser) throw new Error('unpauser is undefined');
-      expect(getAddress(unpauser)).to.equal(getAddress(ownersMultisig.address));
-    });
-
-    it('Should prevent non-owners from unpausing the game', async function () {
-      const { Dice, ownersMultisig, user } = await loadFixture(deployDiceFixture);
-
-      await Dice.write.pause({
-        account: ownersMultisig.address,
+      await setBalance(administrator.account.address, parseEther('1'));
+      await pauseManager.write.pauseContract([Dice.address], {
+        account: administrator.account,
       });
 
       await expect(
-        Dice.write.unpause({
+        Dice.write.roll([50n, 0], {
           account: user.account.address,
+          value: 1000000000000000n,
         }),
-      ).to.be.rejected;
+      ).to.be.rejectedWith('paused!');
     });
-
-    // it('Should allow owners multisig to withdraw funds', async function () {
-    //   const { Dice, owner1, ownersMultisig, publicClient } = await loadFixture(deployDiceFixture);
-    //
-    //   const initialContractBalance = await Dice.read.getContractBalance();
-    //   const initialMultisigBalance = await publicClient.getBalance({
-    //     address: ownersMultisig.address,
-    //   });
-    //
-    //   const withdrawAmount = initialContractBalance / 2n;
-    //
-    //   await Dice.write.withdraw([withdrawAmount], {
-    //     account: owner1.account.address,
-    //   });
-    //
-    //   const finalContractBalance = await Dice.read.getContractBalance();
-    //   const finalMultisigBalance = await publicClient.getBalance({
-    //     address: ownersMultisig.address,
-    //   });
-    //   const owner1Balance = await publicClient.getBalance({
-    //     address: owner1.account.address,
-    //   });
-    //   console.log(finalContractBalance, finalMultisigBalance, owner1Balance);
-    //
-    //   expect(finalContractBalance).to.equal(initialContractBalance - withdrawAmount);
-    //
-    //   expect(finalMultisigBalance > initialMultisigBalance).to.be.true;
-    // });
-
-    // it('Should prevent non-owners from withdrawing funds', async function () {
-    //   const { Dice, user } = await loadFixture(deployDiceFixture);
-    //
-    //   await expect(
-    //     Dice.write.withdraw([1000000000000000n], {
-    //       account: user.account.address,
-    //     }),
-    //   ).to.be.rejected;
-    // });
-    //
-    // it('Should prevent withdrawing more than the contract balance', async function () {
-    //   const { Dice, owner1 } = await loadFixture(deployDiceFixture);
-    //
-    //   const contractBalance = await Dice.read.getContractBalance();
-    //   const excessiveAmount = contractBalance + 1000000000000000n;
-    //
-    //   await expect(
-    //     Dice.write.withdraw([excessiveAmount], {
-    //       account: owner1.account.address,
-    //     }),
-    //   ).to.be.rejectedWith('Insufficient contract balance');
-    // });
   });
 
   describe('Configuration Functions', function () {
     it('Should allow owners multisig to set minimum bet value', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const initialMinBetValue = await Dice.read.minBetValue();
       const newMinBetValue = initialMinBetValue + 1;
 
@@ -670,7 +552,6 @@ describe('Dice Contract', function () {
 
     it('Should prevent setting invalid minimum bet value', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const maxBetValue = await Dice.read.maxBetValue();
 
       await expect(
@@ -694,7 +575,6 @@ describe('Dice Contract', function () {
 
     it('Should allow owners multisig to set maximum bet value', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const newMaxBetValue = 95;
 
       await Dice.write.setMaxBetValue([newMaxBetValue], {
@@ -707,7 +587,6 @@ describe('Dice Contract', function () {
 
     it('Should prevent setting invalid maximum bet value', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const minBetValue = await Dice.read.minBetValue();
 
       await expect(
@@ -731,7 +610,6 @@ describe('Dice Contract', function () {
 
     it('Should allow owners multisig to set minimum bet amount', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const initialMinBetAmount = await Dice.read.minBetAmount();
       const newMinBetAmount = initialMinBetAmount + parseEther('0.001');
 
@@ -745,7 +623,6 @@ describe('Dice Contract', function () {
 
     it('Should prevent setting invalid minimum bet amount', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const maxBetAmount = await Dice.read.maxBetAmount();
 
       await expect(
@@ -769,7 +646,6 @@ describe('Dice Contract', function () {
 
     it('Should allow owners multisig to set maximum bet amount', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const initialMaxBetAmount = await Dice.read.maxBetAmount();
       const newMaxBetAmount = initialMaxBetAmount + parseEther('1');
 
@@ -778,12 +654,12 @@ describe('Dice Contract', function () {
       });
 
       const updatedMaxBetAmount = await Dice.read.maxBetAmount();
+
       expect(updatedMaxBetAmount).to.equal(newMaxBetAmount);
     });
 
     it('Should prevent setting invalid maximum bet amount', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const minBetAmount = await Dice.read.minBetAmount();
 
       await expect(
@@ -801,7 +677,6 @@ describe('Dice Contract', function () {
 
     it('Should allow owners multisig to set house edge', async function () {
       const { Dice, ownersMultisig } = await loadFixture(deployDiceFixture);
-
       const initialHouseEdge = await Dice.read.houseEdge();
       const newHouseEdge = initialHouseEdge + 5;
 
@@ -810,6 +685,7 @@ describe('Dice Contract', function () {
       });
 
       const updatedHouseEdge = await Dice.read.houseEdge();
+
       expect(updatedHouseEdge).to.equal(newHouseEdge);
     });
 
