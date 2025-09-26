@@ -108,19 +108,33 @@ describe('Dice Contract Economy Test', function () {
 
     setBalance(Dice.address, parseEther('100'));
 
-    // Impersonate ownersMultisig to register Dice in GameManager
     await impersonateAccount(ownersMultisig.address);
     await setBalance(ownersMultisig.address, parseEther('100'));
 
-    // Register Dice in GameManager
     await gameManager.write.addGame([Dice.address], {
       account: ownersMultisig.address,
+    });
+
+    const pauseManagerImpl = await hre.viem.deployContract('PauseManager');
+    const pauseManagerInitData = encodeFunctionData({
+      abi: pauseManagerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address],
+    });
+    const pauseManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      pauseManagerImpl.address,
+      pauseManagerInitData,
+    ]);
+    const pauseManager = await hre.viem.getContractAt('PauseManager', pauseManagerProxy.address);
+
+    await addressBook.write.initialSetPauseManager([pauseManager.address], {
+      account: deployer.account.address,
     });
 
     return { Dice, MockVRFCoordinator, user };
   }
 
-  it('Should run 100 bets and track economy', async function () {
+  it('Should run 1000 bets and track economy', async function () {
     const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
 
     let contractBalance = 100n * 10n ** 18n;

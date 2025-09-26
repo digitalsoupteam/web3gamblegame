@@ -116,6 +116,23 @@ describe('Dice Contract', function () {
       account: deployer.account.address,
     });
 
+    // Deploy Treasury
+    const treasuryImpl = await hre.viem.deployContract('Treasury');
+    const treasuryInitData = encodeFunctionData({
+      abi: treasuryImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address],
+    });
+    const treasuryProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      treasuryImpl.address,
+      treasuryInitData,
+    ]);
+    const treasury = await hre.viem.getContractAt('Treasury', treasuryProxy.address);
+
+    await addressBook.write.initialSetTreasury([treasury.address], {
+      account: deployer.account.address,
+    });
+
     for (const owner of [owner1, owner2]) {
       const isSigner = await ownersMultisig.read.signers([owner.account.address]);
       expect(isSigner).to.be.true;
@@ -136,6 +153,7 @@ describe('Dice Contract', function () {
       owner1,
       owner2,
       deployer,
+      treasury,
     };
   }
 
@@ -731,6 +749,60 @@ describe('Dice Contract', function () {
           account: user.account.address,
         }),
       ).to.be.rejected;
+    });
+  });
+
+  describe('Withdraw to Treasury', function () {
+    it('Should allow administrators to withdraw funds to treasury', async function () {
+      const { Dice, administrator, treasury, publicClient } = await loadFixture(deployDiceFixture);
+
+      const initialDiceBalance = await Dice.read.getContractBalance();
+      const initialTreasuryBalance = await publicClient.getBalance({ address: treasury.address });
+
+      const withdrawAmount = parseEther('1');
+
+      await Dice.write.withdrawToTreasury([withdrawAmount], {
+        account: administrator.account.address,
+      });
+
+      const finalDiceBalance = await Dice.read.getContractBalance();
+      const finalTreasuryBalance = await publicClient.getBalance({ address: treasury.address });
+
+      expect(finalDiceBalance).to.equal(initialDiceBalance - withdrawAmount);
+      expect(finalTreasuryBalance).to.equal(initialTreasuryBalance + withdrawAmount);
+    });
+
+    it('Should revert if non-administrator tries to withdraw', async function () {
+      const { Dice, user } = await loadFixture(deployDiceFixture);
+
+      await expect(
+        Dice.write.withdrawToTreasury([parseEther('1')], {
+          account: user.account.address,
+        }),
+      ).to.be.rejected;
+    });
+
+    it('Should revert if withdrawal amount is zero', async function () {
+      const { Dice, administrator } = await loadFixture(deployDiceFixture);
+
+      await expect(
+        Dice.write.withdrawToTreasury([0n], {
+          account: administrator.account.address,
+        }),
+      ).to.be.rejectedWith('_amounts is zero!');
+    });
+
+    it('Should revert if withdrawal amount exceeds contract balance', async function () {
+      const { Dice, administrator } = await loadFixture(deployDiceFixture);
+
+      const contractBalance = await Dice.read.getContractBalance();
+      const excessiveAmount = contractBalance + 1n;
+
+      await expect(
+        Dice.write.withdrawToTreasury([excessiveAmount], {
+          account: administrator.account.address,
+        }),
+      ).to.be.rejectedWith('Insufficient contract balance');
     });
   });
 });
