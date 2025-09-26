@@ -3,8 +3,10 @@ pragma solidity 0.8.28;
 
 import { IAccessRoles } from "./IAccessRoles.sol";
 import { IGameManager } from "../../_interfaces/games/IGameManager.sol";
+import { IPauseManager } from "../../_interfaces/access/IPauseManager.sol";
 
 interface IAddressBook {
     function accessRoles() external view returns (IAccessRoles);
     function gameManager() external view returns (IGameManager);
+    function pauseManager() external view returns (IPauseManager);
 }

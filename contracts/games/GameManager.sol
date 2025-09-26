@@ -100,7 +100,6 @@ contract GameManager is IGameManager, UUPSUpgradeable {
         game.minBetAmount();
         game.maxBetAmount();
         game.houseEdge();
-        game.isPaused();
         return true;
     }
 

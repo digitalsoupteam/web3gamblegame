@@ -7,6 +7,4 @@ interface IGame {
     function maxBetAmount() external view returns (uint256 registered);
 
     function houseEdge() external view returns (uint8 registered);
-
-    function isPaused() external view returns (bool registered);
 }

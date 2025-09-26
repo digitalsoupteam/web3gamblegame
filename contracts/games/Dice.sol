@@ -22,7 +22,6 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
     uint32 private callbackGasLimit;
     uint16 private requestConfirmations;
     IAddressBook private addressBook;
-    bool public isPaused;
     uint8 public minBetValue;
     uint8 public maxBetValue;
     uint256 public minBetAmount;
@@ -77,10 +76,6 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
     error InvalidBetAmount();
     error InvalidTargetNumber();
     error InsufficientContractBalance();
-    error GameIsPaused();
-
-    event GamePaused(address indexed pauser);
-    event GameUnpaused(address indexed unpauser);
 
     /**
      * @notice Constructor that disables initializers
@@ -131,7 +126,6 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         callbackGasLimit = 100000;
         requestConfirmations = 3;
         addressBook = IAddressBook(_addressBook);
-        isPaused = false;
         minBetValue = _minBetValue;
         maxBetValue = _maxBetValue;
         minBetAmount = _minBetAmount;
@@ -172,7 +166,8 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
             addressBook.gameManager().isGameExist(address(this)),
             "Game doesn't exist in GameManager"
         );
-        if (isPaused) revert GameIsPaused();
+        addressBook.pauseManager().requireNotPaused();
+        
         if (rollResults[msg.sender] == type(uint256).max) revert RollInProgress();
         if (msg.value < minBetAmount || msg.value > maxBetAmount) revert InvalidBetAmount();
         if (targetNumber < minBetValue || targetNumber > maxBetValue) revert InvalidTargetNumber();
@@ -351,26 +346,6 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      */
     function getContractBalance() external view returns (uint256) {
         return address(this).balance;
-    }
-
-    /**
-     * @notice Pauses the game
-     * @dev Only the owners multisig can pause the game
-     */
-    function pause() external {
-        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
-        isPaused = true;
-        emit GamePaused(msg.sender);
-    }
-
-    /**
-     * @notice Unpauses the game
-     * @dev Only the owners multisig can unpause the game
-     */
-    function unpause() external {
-        addressBook.accessRoles().requireOwnersMultisig(msg.sender);
-        isPaused = false;
-        emit GameUnpaused(msg.sender);
     }
 
     //    /**
