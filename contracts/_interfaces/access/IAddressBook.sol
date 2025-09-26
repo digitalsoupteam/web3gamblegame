@@ -9,4 +9,5 @@ interface IAddressBook {
     function accessRoles() external view returns (IAccessRoles);
     function gameManager() external view returns (IGameManager);
     function pauseManager() external view returns (IPauseManager);
+    function treasury() external view returns (address);
 }

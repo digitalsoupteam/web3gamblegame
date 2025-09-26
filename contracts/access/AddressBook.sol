@@ -12,6 +12,7 @@ contract AddressBook is IAddressBook, UUPSUpgradeable {
     IAccessRoles public accessRoles;
     IGameManager public gameManager;
     IPauseManager public pauseManager;
+    address public treasury;
 
     function initialize(address _accessRoles) public initializer {
         require(_accessRoles != address(0), "_accessRoles is zero!");
@@ -30,6 +31,13 @@ contract AddressBook is IAddressBook, UUPSUpgradeable {
         require(_pauseManager != address(0), "_pause is zero!");
         require(address(pauseManager) == address(0), "pauseManager contract exists!");
         pauseManager = IPauseManager(_pauseManager);
+    }
+
+    function initialSetTreasury(address _treasury) external {
+        accessRoles.requireDeployer(msg.sender);
+        require(_treasury != address(0), "_treasury is zero!");
+        require(treasury == address(0), "treasury contract exists!");
+        treasury = _treasury;
     }
 
     function _authorizeUpgrade(address) internal view override {

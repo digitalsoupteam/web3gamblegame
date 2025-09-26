@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { IVRFCoordinatorV2Plus } from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
-import { VRFConsumerBaseV2Plus } from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
-import { VRFV2PlusClient } from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
-import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { IGame } from "../_interfaces/games/IGame.sol";
-import { IAddressBook } from "../_interfaces/access/IAddressBook.sol";
-import { AddressBook } from "../access/AddressBook.sol";
+import {IVRFCoordinatorV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
+import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
+import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {IGame} from "../_interfaces/games/IGame.sol";
+import {IAddressBook} from "../_interfaces/access/IAddressBook.sol";
+import {AddressBook} from "../access/AddressBook.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
 /**
  * @title Dice Contract
@@ -167,7 +168,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
             "Game doesn't exist in GameManager"
         );
         addressBook.pauseManager().requireNotPaused();
-        
+
         if (rollResults[msg.sender] == type(uint256).max) revert RollInProgress();
         if (msg.value < minBetAmount || msg.value > maxBetAmount) revert InvalidBetAmount();
         if (targetNumber < minBetValue || targetNumber > maxBetValue) revert InvalidTargetNumber();
@@ -196,7 +197,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
             callbackGasLimit: callbackGasLimit,
             numWords: 1,
             extraArgs: VRFV2PlusClient._argsToBytes(
-                VRFV2PlusClient.ExtraArgsV1({ nativePayment: false })
+                VRFV2PlusClient.ExtraArgsV1({nativePayment: false})
             )
         });
 
@@ -275,7 +276,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         bets[roller] = bet;
 
         if (won) {
-            (bool success, ) = payable(roller).call{ value: bet.payout }("");
+            (bool success,) = payable(roller).call{value: bet.payout}("");
             require(success, "Transfer failed");
         }
 
@@ -324,16 +325,16 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
      * @return payout The potential payout
      */
     function getCurrentBet()
-        external
-        view
-        returns (
-            uint256 amount,
-            uint256 targetNumber,
-            ComparisonType comparisonType,
-            bool settled,
-            bool won,
-            uint256 payout
-        )
+    external
+    view
+    returns (
+        uint256 amount,
+        uint256 targetNumber,
+        ComparisonType comparisonType,
+        bool settled,
+        bool won,
+        uint256 payout
+    )
     {
         Bet memory bet = bets[msg.sender];
         return (bet.amount, bet.targetNumber, bet.comparisonType, bet.settled, bet.won, bet.payout);
@@ -348,18 +349,17 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         return address(this).balance;
     }
 
-    //    /**
-    //     * @notice Withdraw funds from the contract (owners multisig only)
-    //     * @dev Allows the owners multisig to withdraw funds from the contract
-    //     * @param amount The amount to withdraw
-    //     */
-    //    function withdraw(uint256 amount) external {
-    //        accessRoles.requireAdministrator(msg.sender);
-    //        require(amount <= address(this).balance, "Insufficient contract balance");
-    //
-    //        (bool success, ) = payable(msg.sender).call{ value: amount }("");
-    //        require(success, "Transfer failed");
-    //    }
+    /**
+     * @notice Withdraw funds from the contract to treasury (administrators only)
+     * @dev Allows the administrators to withdraw funds from the contract to treasury
+     * @param _amount The amount to withdraw
+     */
+    function withdrawToTreasury(uint256 _amount) external {
+        addressBook.accessRoles().requireAdministrator(msg.sender);
+        require(_amount > 0, "_amounts is zero!");
+        require(_amount <= address(this).balance, "Insufficient contract balance");
+        Address.sendValue(payable(addressBook.treasury()), _amount);
+    }
 
     /**
      * @notice Sets the minimum target number value (owners multisig only)
