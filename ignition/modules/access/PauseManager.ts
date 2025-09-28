@@ -8,5 +8,5 @@ export default buildModule('PauseManagerModule', m => {
   const proxy = m.contract('ERC1967Proxy', [impl, initData]);
   const addressBook = m.contractAt("AddressBook", addressBookProxy);
   m.call(addressBook, 'initialSetPauseManager', [proxy]);
-  return { PauseManagerProxy: proxy, PauseManagerImpl: impl };
+  return { pauseManagerProxy: proxy, pauseManagerImpl: impl };
 });

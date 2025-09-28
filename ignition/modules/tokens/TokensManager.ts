@@ -13,5 +13,5 @@ export default buildModule('TokensManagerModule', m => {
   const proxy = m.contract('ERC1967Proxy', [impl, initData]);
   const addressBook = m.contractAt("AddressBook", addressBookProxy);
   m.call(addressBook, 'initialSetTokensManager', [proxy]);
-  return { TokensManagerProxy: proxy, TokensManagerImpl: impl };
+  return { tokensManagerProxy: proxy, tokensManagerImpl: impl };
 });
