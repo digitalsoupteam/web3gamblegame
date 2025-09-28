@@ -8,8 +8,11 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IGame} from "../_interfaces/games/IGame.sol";
 import {IAddressBook} from "../_interfaces/access/IAddressBook.sol";
+import {ITokensManager} from "../_interfaces/tokens/ITokensManager.sol";
 import {AddressBook} from "../access/AddressBook.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
  * @title Dice Contract
@@ -18,6 +21,11 @@ import {Address} from "@openzeppelin/contracts/utils/Address.sol";
  * @dev Implements UUPS upgradeable pattern
  */
 contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
+    using SafeERC20 for IERC20;
+    using Address for address payable;
+
+    address constant NATIVE_TOKEN = address(0);
+
     uint256 private subscriptionId;
     bytes32 private keyHash;
     uint32 private callbackGasLimit;
@@ -41,6 +49,7 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         bool settled;
         bool won;
         uint256 payout;
+        address token;
     }
 
     mapping(uint256 => address) private requestIdToSender;
@@ -53,14 +62,16 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         address indexed roller,
         uint256 betAmount,
         uint256 targetNumber,
-        ComparisonType comparisonType
+        ComparisonType comparisonType,
+        address token
     );
     event DiceRollFulfilled(
         uint256 indexed requestId,
         address indexed roller,
         uint256 result,
         bool won,
-        uint256 payout
+        uint256 payout,
+        address token
     );
     event BetSettled(
         address indexed player,
@@ -69,7 +80,8 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         ComparisonType comparisonType,
         uint256 result,
         bool won,
-        uint256 payout
+        uint256 payout,
+        address token
     );
 
     error RollInProgress();
@@ -153,39 +165,63 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
     fallback() external payable {}
 
     /**
-     * @notice Initiates a dice roll with a bet and requests randomness from Chainlink VRF
-     * @dev Validates bet amount and target number, stores the bet, and sends a VRF request
+     * @notice Initiates a dice roll with either a native token (ETH) or ERC20 token bet and requests randomness from Chainlink VRF
+     * @dev Validates bet parameters, stores the bet, and sends a VRF request
      * @param targetNumber The number to compare the roll result against (must be between minBetValue and maxBetValue)
      * @param comparisonType The type of comparison for the bet: GREATER_THAN or LESS_THAN
+     * @param token The address of the token to bet with (use NATIVE_TOKEN for ETH)
+     * @param betAmount The amount of tokens to bet (ignored for native token, use msg.value instead)
      * @return requestId The ID of the Chainlink VRF request associated with this dice roll
      */
     function roll(
         uint256 targetNumber,
-        ComparisonType comparisonType
-    ) external payable returns (uint256) {
+        ComparisonType comparisonType,
+        address token,
+        uint256 betAmount
+    ) public payable returns (uint256) {
         require(
             addressBook.gameManager().isGameExist(address(this)),
             "Game doesn't exist in GameManager"
         );
         addressBook.pauseManager().requireNotPaused();
+        addressBook.tokensManager().requireTokenSupport(token);
+
+        uint256 actualBetAmount;
+        if (token == NATIVE_TOKEN) {
+            actualBetAmount = msg.value;
+            require(
+                betAmount == 0 || betAmount == msg.value,
+                "Bet amount must match msg.value for native token"
+            );
+        } else {
+            actualBetAmount = betAmount;
+            require(msg.value == 0, "Cannot send ETH when betting with tokens");
+            IERC20(token).safeTransferFrom(msg.sender, address(this), actualBetAmount);
+        }
 
         if (rollResults[msg.sender] == type(uint256).max) revert RollInProgress();
-        if (msg.value < minBetAmount || msg.value > maxBetAmount) revert InvalidBetAmount();
+        if (actualBetAmount < minBetAmount || actualBetAmount > maxBetAmount) revert InvalidBetAmount();
         if (targetNumber < minBetValue || targetNumber > maxBetValue) revert InvalidTargetNumber();
 
-        uint256 payout = calculatePayout(msg.value, targetNumber, comparisonType);
 
-        if (address(this).balance < payout) revert InsufficientContractBalance();
+        uint256 payout = calculatePayout(actualBetAmount, targetNumber, comparisonType);
+
+        if (token == NATIVE_TOKEN) {
+            if (address(this).balance < payout) revert InsufficientContractBalance();
+        } else {
+            if (IERC20(token).balanceOf(address(this)) < payout) revert InsufficientContractBalance();
+        }
 
         rollResults[msg.sender] = type(uint256).max;
 
         Bet memory bet = Bet({
-            amount: msg.value,
+            amount: actualBetAmount,
             targetNumber: targetNumber,
             comparisonType: comparisonType,
             settled: false,
             won: false,
-            payout: payout
+            payout: payout,
+            token: token
         });
 
         bets[msg.sender] = bet;
@@ -204,10 +240,9 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         uint256 requestId = s_vrfCoordinator.requestRandomWords(request);
 
         requestIdToSender[requestId] = msg.sender;
-
         requestIdToBet[requestId] = bet;
 
-        emit DiceRollRequested(requestId, msg.sender, msg.value, targetNumber, comparisonType);
+        emit DiceRollRequested(requestId, msg.sender, actualBetAmount, targetNumber, comparisonType, token);
 
         return requestId;
     }
@@ -276,11 +311,14 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
         bets[roller] = bet;
 
         if (won) {
-            (bool success,) = payable(roller).call{value: bet.payout}("");
-            require(success, "Transfer failed");
+            if (bet.token == NATIVE_TOKEN) {
+                payable(roller).sendValue(bet.payout);
+            } else {
+                IERC20(bet.token).safeTransfer(roller, bet.payout);
+            }
         }
 
-        emit DiceRollFulfilled(requestId, roller, result, won, won ? bet.payout : 0);
+        emit DiceRollFulfilled(requestId, roller, result, won, won ? bet.payout : 0, bet.token);
         emit BetSettled(
             roller,
             bet.amount,
@@ -288,7 +326,8 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
             bet.comparisonType,
             result,
             won,
-            won ? bet.payout : 0
+            won ? bet.payout : 0,
+            bet.token
         );
     }
 
@@ -350,15 +389,25 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
     }
 
     /**
-     * @notice Withdraw funds from the contract to treasury (administrators only)
+     * @notice Withdraw funds (native or ERC20) from the contract to treasury (administrators only)
      * @dev Allows the administrators to withdraw funds from the contract to treasury
+     * @param _token The address of the token to withdraw (use NATIVE_TOKEN for ETH)
      * @param _amount The amount to withdraw
      */
-    function withdrawToTreasury(uint256 _amount) external {
+    function withdrawToTreasury(address _token, uint256 _amount) external {
         addressBook.accessRoles().requireAdministrator(msg.sender);
-        require(_amount > 0, "_amounts is zero!");
-        require(_amount <= address(this).balance, "Insufficient contract balance");
-        Address.sendValue(payable(addressBook.treasury()), _amount);
+        require(_amount > 0, "_amount is zero!");
+
+        if (_token != NATIVE_TOKEN) addressBook.tokensManager().requireTokenSupport(_token);
+
+        if (_token == NATIVE_TOKEN) {
+            require(_amount <= address(this).balance, "Insufficient contract balance");
+            Address.sendValue(payable(addressBook.treasury()), _amount);
+        } else {
+            IERC20 token = IERC20(_token);
+            require(_amount <= token.balanceOf(address(this)), "Insufficient token balance");
+            token.safeTransfer(addressBook.treasury(), _amount);
+        }
     }
 
     /**

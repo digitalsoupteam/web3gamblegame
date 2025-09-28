@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import hre from 'hardhat';
-import { encodeFunctionData, getAddress, parseEther } from 'viem';
+import { encodeFunctionData, getAddress, parseEther, zeroAddress } from 'viem';
 import {
   impersonateAccount,
   loadFixture,
@@ -72,6 +72,56 @@ describe('Dice Contract', function () {
       account: deployer.account.address,
     });
 
+    // Deploy MockERC20 token
+    const mockToken = await hre.viem.deployContract('MockERC20', ['Mock Token', 'MTK', 18]);
+    await mockToken.write.mint([user.account.address, parseEther('1000')]);
+
+    // Deploy Pricers for native token and ERC20 token
+    const nativePricerImpl = await hre.viem.deployContract('Pricer');
+    const nativePricerInitData = encodeFunctionData({
+      abi: nativePricerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address, 50000000000n, 'ETH/USD Pricer'], // $500 with 8 decimals
+    });
+    const nativePricerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      nativePricerImpl.address,
+      nativePricerInitData,
+    ]);
+    const nativePricer = await hre.viem.getContractAt('Pricer', nativePricerProxy.address);
+
+    const tokenPricerImpl = await hre.viem.deployContract('Pricer');
+    const tokenPricerInitData = encodeFunctionData({
+      abi: tokenPricerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address, 100000000n, 'MTK/USD Pricer'], // $1 with 8 decimals
+    });
+    const tokenPricerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      tokenPricerImpl.address,
+      tokenPricerInitData,
+    ]);
+    const tokenPricer = await hre.viem.getContractAt('Pricer', tokenPricerProxy.address);
+
+    // Deploy TokensManager
+    const tokensManagerImpl = await hre.viem.deployContract('TokensManager');
+    const tokensManagerInitData = encodeFunctionData({
+      abi: tokensManagerImpl.abi,
+      functionName: 'initialize',
+      args: [
+        addressBook.address,
+        [zeroAddress, mockToken.address],
+        [nativePricer.address, tokenPricer.address],
+      ],
+    });
+    const tokensManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      tokensManagerImpl.address,
+      tokensManagerInitData,
+    ]);
+    const tokensManager = await hre.viem.getContractAt('TokensManager', tokensManagerProxy.address);
+
+    await addressBook.write.initialSetTokensManager([tokensManager.address], {
+      account: deployer.account.address,
+    });
+
     const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
     const DiceImpl = await hre.viem.deployContract('Dice', [MockVRFCoordinator.address]);
     const diceInitData = encodeFunctionData({
@@ -95,6 +145,9 @@ describe('Dice Contract', function () {
     ]);
     const Dice = await hre.viem.getContractAt('Dice', DiceProxy.address);
     await setBalance(Dice.address, parseEther('100'));
+
+    // Mint some tokens to the Dice contract for payouts
+    await mockToken.write.mint([Dice.address, parseEther('100')]);
 
     await gameManager.write.addGame([Dice.address], {
       account: ownersMultisig.address,
@@ -154,6 +207,9 @@ describe('Dice Contract', function () {
       owner2,
       deployer,
       treasury,
+      mockToken,
+      tokensManager,
+      zeroAddress, // NATIVE_TOKEN
     };
   }
 
@@ -172,9 +228,9 @@ describe('Dice Contract', function () {
   });
 
   describe('Roll Function', function () {
-    it('Should emit DiceRollRequested event when roll is called', async function () {
-      const { Dice, user } = await loadFixture(deployDiceFixture);
-      const txHash = await Dice.write.roll([50n, 0], {
+    it('Should emit DiceRollRequested event when roll is called with native token', async function () {
+      const { Dice, user, zeroAddress } = await loadFixture(deployDiceFixture);
+      const txHash = await Dice.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: 1000000000000000n,
       });
@@ -194,11 +250,43 @@ describe('Dice Contract', function () {
       if (!roller) throw new Error('roller is undefined');
 
       expect(getAddress(roller)).to.equal(getAddress(user.account.address));
+      expect(events[0].args.token).to.equal(zeroAddress);
+    });
+
+    it('Should emit DiceRollRequested event when roll is called with ERC20 token', async function () {
+      const { Dice, user, mockToken } = await loadFixture(deployDiceFixture);
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, 1000000000000000n], {
+        account: user.account.address,
+      });
+
+      const txHash = await Dice.write.roll([50n, 0, mockToken.address, 1000000000000000n], {
+        account: user.account.address,
+      });
+
+      const publicClient = await hre.viem.getPublicClient();
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      const events = await Dice.getEvents.DiceRollRequested(
+        {
+          roller: user.account.address,
+        },
+        {
+          blockHash: receipt.blockHash,
+        },
+      );
+
+      expect(events.length).to.equal(1);
+      const roller = events[0].args.roller;
+      if (!roller) throw new Error('roller is undefined');
+
+      expect(getAddress(roller)).to.equal(getAddress(user.account.address));
+      expect(getAddress(events[0].args.token)).to.equal(getAddress(mockToken.address));
     });
 
     it('Should revert if the game is not registered in GameManager', async function () {
       const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
-      const { user, addressBook } = await loadFixture(deployDiceFixture);
+      const { user, addressBook, zeroAddress } = await loadFixture(deployDiceFixture);
       const UnregisteredDiceImpl = await hre.viem.deployContract('Dice', [
         MockVRFCoordinator.address,
       ]);
@@ -225,25 +313,44 @@ describe('Dice Contract', function () {
       await setBalance(UnregisteredDice.address, parseEther('100'));
 
       await expect(
-        UnregisteredDice.write.roll([50n, 0], {
+        UnregisteredDice.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: 1000000000000000n,
         }),
       ).to.be.rejectedWith("Game doesn't exist in GameManager");
     });
 
-    it('Should revert if a roll is already in progress', async function () {
-      const { Dice, user } = await loadFixture(deployDiceFixture);
+    it('Should revert if a roll is already in progress with native token', async function () {
+      const { Dice, user, zeroAddress } = await loadFixture(deployDiceFixture);
 
-      await Dice.write.roll([50n, 0], {
+      await Dice.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: 1000000000000000n,
       });
 
       await expect(
-        Dice.write.roll([50n, 0], {
+        Dice.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: 1000000000000000n,
+        }),
+      ).to.be.rejectedWith('RollInProgress');
+    });
+
+    it('Should revert if a roll is already in progress with ERC20 token', async function () {
+      const { Dice, user, mockToken } = await loadFixture(deployDiceFixture);
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, 2000000000000000n], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([50n, 0, mockToken.address, 1000000000000000n], {
+        account: user.account.address,
+      });
+
+      await expect(
+        Dice.write.roll([50n, 0, mockToken.address, 1000000000000000n], {
+          account: user.account.address,
         }),
       ).to.be.rejectedWith('RollInProgress');
     });
@@ -319,13 +426,13 @@ describe('Dice Contract', function () {
       expect(bet[5]).to.equal(0n);
     });
 
-    it('Should return correct bet details after placing a bet', async function () {
-      const { Dice, user } = await loadFixture(deployDiceFixture);
+    it('Should return correct bet details after placing a native token bet', async function () {
+      const { Dice, user, zeroAddress } = await loadFixture(deployDiceFixture);
       const betAmount = 1000000000000000n;
       const targetNumber = 50n;
       const comparisonType = 0;
 
-      await Dice.write.roll([targetNumber, comparisonType], {
+      await Dice.write.roll([targetNumber, comparisonType, zeroAddress, 0n], {
         account: user.account.address,
         value: betAmount,
       });
@@ -349,15 +456,82 @@ describe('Dice Contract', function () {
       expect(bet[5]).to.equal(calculatedPayout);
     });
 
-    it('Should update bet details after fulfillment', async function () {
-      const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
+    it('Should return correct bet details after placing an ERC20 token bet', async function () {
+      const { Dice, user, mockToken } = await loadFixture(deployDiceFixture);
       const betAmount = 1000000000000000n;
       const targetNumber = 50n;
       const comparisonType = 0;
 
-      await Dice.write.roll([targetNumber, comparisonType], {
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([targetNumber, comparisonType, mockToken.address, betAmount], {
+        account: user.account.address,
+      });
+
+      const bet = await Dice.read.getCurrentBet({
+        account: user.account.address,
+      });
+
+      expect(bet[0]).to.equal(betAmount);
+      expect(bet[1]).to.equal(targetNumber);
+      expect(bet[2]).to.equal(comparisonType);
+      expect(bet[3]).to.be.false;
+      expect(bet[4]).to.be.false;
+
+      const calculatedPayout = await Dice.read.calculatePayout(
+        [betAmount, targetNumber, comparisonType],
+        {
+          account: user.account.address,
+        },
+      );
+      expect(bet[5]).to.equal(calculatedPayout);
+    });
+
+    it('Should update bet details after fulfillment with native token', async function () {
+      const { Dice, MockVRFCoordinator, user, zeroAddress } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+      const targetNumber = 50n;
+      const comparisonType = 0;
+
+      await Dice.write.roll([targetNumber, comparisonType, zeroAddress, 0n], {
         account: user.account.address,
         value: betAmount,
+      });
+
+      const randomWord = 74n;
+      const randomWords = [randomWord];
+
+      await MockVRFCoordinator.write.fulfillRandomWords([Dice.address, randomWords], {
+        account: user.account.address,
+      });
+
+      const bet = await Dice.read.getCurrentBet({
+        account: user.account.address,
+      });
+
+      expect(bet[0]).to.equal(betAmount);
+      expect(bet[1]).to.equal(targetNumber);
+      expect(bet[2]).to.equal(comparisonType);
+      expect(bet[3]).to.be.true;
+      expect(bet[4]).to.be.true;
+    });
+
+    it('Should update bet details after fulfillment with ERC20 token', async function () {
+      const { Dice, MockVRFCoordinator, user, mockToken } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+      const targetNumber = 50n;
+      const comparisonType = 0;
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([targetNumber, comparisonType, mockToken.address, betAmount], {
+        account: user.account.address,
       });
 
       const randomWord = 74n;
@@ -389,19 +563,59 @@ describe('Dice Contract', function () {
       expect(contractBalance).to.equal(actualBalance);
     });
 
-    it('Should update contract balance after receiving a bet', async function () {
-      const { Dice, user } = await loadFixture(deployDiceFixture);
+    it('Should update contract balance after receiving a native token bet', async function () {
+      const { Dice, user, zeroAddress } = await loadFixture(deployDiceFixture);
 
       const initialBalance = await Dice.read.getContractBalance();
       const betAmount = 1000000000000000n;
 
-      await Dice.write.roll([50n, 0], {
+      await Dice.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: betAmount,
       });
 
       const newBalance = await Dice.read.getContractBalance();
       expect(newBalance).to.equal(initialBalance + betAmount);
+    });
+
+    it('Should not change contract ETH balance after receiving an ERC20 token bet', async function () {
+      const { Dice, user, mockToken } = await loadFixture(deployDiceFixture);
+
+      const initialBalance = await Dice.read.getContractBalance();
+      const betAmount = 1000000000000000n;
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([50n, 0, mockToken.address, betAmount], {
+        account: user.account.address,
+      });
+
+      const newBalance = await Dice.read.getContractBalance();
+      expect(newBalance).to.equal(initialBalance); // ETH balance should not change
+    });
+
+    it('Should update ERC20 token balance after receiving an ERC20 token bet', async function () {
+      const { Dice, user, mockToken } = await loadFixture(deployDiceFixture);
+
+      // Get initial token balance of the Dice contract
+      const initialTokenBalance = await mockToken.read.balanceOf([Dice.address]);
+      const betAmount = 1000000000000000n;
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([50n, 0, mockToken.address, betAmount], {
+        account: user.account.address,
+      });
+
+      // Get new token balance of the Dice contract
+      const newTokenBalance = await mockToken.read.balanceOf([Dice.address]);
+      expect(newTokenBalance).to.equal(initialTokenBalance + betAmount);
     });
   });
 
@@ -415,10 +629,10 @@ describe('Dice Contract', function () {
       expect(result).to.equal(0n);
     });
 
-    it('Should return 0 if a roll is in progress', async function () {
-      const { Dice, user } = await loadFixture(deployDiceFixture);
+    it('Should return 0 if a native token roll is in progress', async function () {
+      const { Dice, user, zeroAddress } = await loadFixture(deployDiceFixture);
 
-      await Dice.write.roll([50n, 0], {
+      await Dice.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: 1000000000000000n,
       });
@@ -430,15 +644,35 @@ describe('Dice Contract', function () {
       expect(result).to.equal(0n);
     });
 
-    it('Should correctly identify when a roll is in progress', async function () {
-      const { Dice, user } = await loadFixture(deployDiceFixture);
+    it('Should return 0 if an ERC20 token roll is in progress', async function () {
+      const { Dice, user, mockToken } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([50n, 0, mockToken.address, betAmount], {
+        account: user.account.address,
+      });
+
+      const result = await Dice.read.getLatestRollResult({
+        account: user.account.address,
+      });
+
+      expect(result).to.equal(0n);
+    });
+
+    it('Should correctly identify when a native token roll is in progress', async function () {
+      const { Dice, user, zeroAddress } = await loadFixture(deployDiceFixture);
       const beforeRoll = await Dice.read.isRollInProgress({
         account: user.account.address,
       });
 
       expect(beforeRoll).to.be.false;
 
-      await Dice.write.roll([50n, 0], {
+      await Dice.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: 1000000000000000n,
       });
@@ -450,10 +684,36 @@ describe('Dice Contract', function () {
       expect(afterRoll).to.be.true;
     });
 
-    it('Should correctly calculate and store roll result after fulfillment', async function () {
-      const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
+    it('Should correctly identify when an ERC20 token roll is in progress', async function () {
+      const { Dice, user, mockToken } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
 
-      await Dice.write.roll([50n, 0], {
+      const beforeRoll = await Dice.read.isRollInProgress({
+        account: user.account.address,
+      });
+
+      expect(beforeRoll).to.be.false;
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([50n, 0, mockToken.address, betAmount], {
+        account: user.account.address,
+      });
+
+      const afterRoll = await Dice.read.isRollInProgress({
+        account: user.account.address,
+      });
+
+      expect(afterRoll).to.be.true;
+    });
+
+    it('Should correctly calculate and store roll result after fulfillment with native token', async function () {
+      const { Dice, MockVRFCoordinator, user, zeroAddress } = await loadFixture(deployDiceFixture);
+
+      await Dice.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: 1000000000000000n,
       });
@@ -476,10 +736,41 @@ describe('Dice Contract', function () {
       expect(rollInProgress).to.be.false;
     });
 
-    it('Should emit DiceRollFulfilled event when random words are fulfilled', async function () {
-      const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
+    it('Should correctly calculate and store roll result after fulfillment with ERC20 token', async function () {
+      const { Dice, MockVRFCoordinator, user, mockToken } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
 
-      await Dice.write.roll([50n, 0], {
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([50n, 0, mockToken.address, betAmount], {
+        account: user.account.address,
+      });
+
+      const randomWord = 26n;
+      const randomWords = [randomWord];
+      await MockVRFCoordinator.write.fulfillRandomWords([Dice.address, randomWords], {
+        account: user.account.address,
+      });
+
+      const result = await Dice.read.getLatestRollResult({
+        account: user.account.address,
+      });
+
+      expect(result).to.equal(27n);
+
+      const rollInProgress = await Dice.read.isRollInProgress({
+        account: user.account.address,
+      });
+      expect(rollInProgress).to.be.false;
+    });
+
+    it('Should emit DiceRollFulfilled event when random words are fulfilled with native token', async function () {
+      const { Dice, MockVRFCoordinator, user, zeroAddress } = await loadFixture(deployDiceFixture);
+
+      await Dice.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: 1000000000000000n,
       });
@@ -509,11 +800,53 @@ describe('Dice Contract', function () {
 
       const expectedResult = (123456789n % 100n) + 1n;
       expect(events[0].args.result).to.equal(expectedResult);
+      expect(events[0].args.token).to.equal(zeroAddress);
+    });
+
+    it('Should emit DiceRollFulfilled event when random words are fulfilled with ERC20 token', async function () {
+      const { Dice, MockVRFCoordinator, user, mockToken } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await Dice.write.roll([50n, 0, mockToken.address, betAmount], {
+        account: user.account.address,
+      });
+
+      const randomWords = [123456789n];
+      const diceAddress = Dice.address;
+
+      const txHash = await MockVRFCoordinator.write.fulfillRandomWords([diceAddress, randomWords], {
+        account: user.account.address,
+      });
+      const publicClient = await hre.viem.getPublicClient();
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      const events = await Dice.getEvents.DiceRollFulfilled(
+        {
+          roller: user.account.address,
+        },
+        {
+          blockHash: receipt.blockHash,
+        },
+      );
+
+      expect(events.length).to.equal(1);
+
+      const roller = events[0].args.roller;
+      if (!roller) throw new Error('roller is undefined');
+      expect(getAddress(roller)).to.equal(getAddress(user.account.address));
+
+      const expectedResult = (123456789n % 100n) + 1n;
+      expect(events[0].args.result).to.equal(expectedResult);
+      expect(getAddress(events[0].args.token)).to.equal(getAddress(mockToken.address));
     });
   });
   describe('Pause Integration', function () {
-    it('Should revert when PauseManager is paused', async function () {
-      const { Dice, user, administrator, addressBook } = await loadFixture(deployDiceFixture);
+    it('Should revert when PauseManager is paused with native token', async function () {
+      const { Dice, user, administrator, addressBook, zeroAddress } = await loadFixture(deployDiceFixture);
 
       const pauseManagerAddress = await addressBook.read.pauseManager();
       const pauseManager = await hre.viem.getContractAt('PauseManager', pauseManagerAddress);
@@ -528,15 +861,43 @@ describe('Dice Contract', function () {
       });
 
       await expect(
-        Dice.write.roll([50n, 0], {
+        Dice.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: 1000000000000000n,
         }),
       ).to.be.rejectedWith('paused!');
     });
 
-    it('Should revert when specific contract is paused in PauseManager', async function () {
-      const { Dice, user, administrator, addressBook } = await loadFixture(deployDiceFixture);
+    it('Should revert when PauseManager is paused with ERC20 token', async function () {
+      const { Dice, user, administrator, addressBook, mockToken } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+
+      const pauseManagerAddress = await addressBook.read.pauseManager();
+      const pauseManager = await hre.viem.getContractAt('PauseManager', pauseManagerAddress);
+
+      const accessRolesAddress = await addressBook.read.accessRoles();
+      const accessRoles = await hre.viem.getContractAt('AccessRoles', accessRolesAddress);
+
+      await setBalance(administrator.account.address, parseEther('1'));
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await pauseManager.write.pauseContract([Dice.address], {
+        account: administrator.account,
+      });
+
+      await expect(
+        Dice.write.roll([50n, 0, mockToken.address, betAmount], {
+          account: user.account.address,
+        }),
+      ).to.be.rejectedWith('paused!');
+    });
+
+    it('Should revert when specific contract is paused in PauseManager with native token', async function () {
+      const { Dice, user, administrator, addressBook, zeroAddress } = await loadFixture(deployDiceFixture);
       const pauseManagerAddress = await addressBook.read.pauseManager();
       const pauseManager = await hre.viem.getContractAt('PauseManager', pauseManagerAddress);
 
@@ -546,9 +907,34 @@ describe('Dice Contract', function () {
       });
 
       await expect(
-        Dice.write.roll([50n, 0], {
+        Dice.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: 1000000000000000n,
+        }),
+      ).to.be.rejectedWith('paused!');
+    });
+
+    it('Should revert when specific contract is paused in PauseManager with ERC20 token', async function () {
+      const { Dice, user, administrator, addressBook, mockToken } = await loadFixture(deployDiceFixture);
+      const betAmount = 1000000000000000n;
+
+      const pauseManagerAddress = await addressBook.read.pauseManager();
+      const pauseManager = await hre.viem.getContractAt('PauseManager', pauseManagerAddress);
+
+      await setBalance(administrator.account.address, parseEther('1'));
+
+      // Approve the Dice contract to spend tokens
+      await mockToken.write.approve([Dice.address, betAmount], {
+        account: user.account.address,
+      });
+
+      await pauseManager.write.pauseContract([Dice.address], {
+        account: administrator.account,
+      });
+
+      await expect(
+        Dice.write.roll([50n, 0, mockToken.address, betAmount], {
+          account: user.account.address,
         }),
       ).to.be.rejectedWith('paused!');
     });
@@ -753,15 +1139,15 @@ describe('Dice Contract', function () {
   });
 
   describe('Withdraw to Treasury', function () {
-    it('Should allow administrators to withdraw funds to treasury', async function () {
-      const { Dice, administrator, treasury, publicClient } = await loadFixture(deployDiceFixture);
+    it('Should allow administrators to withdraw native tokens to treasury', async function () {
+      const { Dice, administrator, treasury, publicClient, zeroAddress } = await loadFixture(deployDiceFixture);
 
       const initialDiceBalance = await Dice.read.getContractBalance();
       const initialTreasuryBalance = await publicClient.getBalance({ address: treasury.address });
 
       const withdrawAmount = parseEther('1');
 
-      await Dice.write.withdrawToTreasury([withdrawAmount], {
+      await Dice.write.withdrawToTreasury([zeroAddress, withdrawAmount], {
         account: administrator.account.address,
       });
 
@@ -772,37 +1158,91 @@ describe('Dice Contract', function () {
       expect(finalTreasuryBalance).to.equal(initialTreasuryBalance + withdrawAmount);
     });
 
-    it('Should revert if non-administrator tries to withdraw', async function () {
-      const { Dice, user } = await loadFixture(deployDiceFixture);
+    it('Should allow administrators to withdraw ERC20 tokens to treasury', async function () {
+      const { Dice, administrator, treasury, mockToken } = await loadFixture(deployDiceFixture);
+
+      // Get initial token balances
+      const initialDiceTokenBalance = await mockToken.read.balanceOf([Dice.address]);
+      const initialTreasuryTokenBalance = await mockToken.read.balanceOf([treasury.address]);
+
+      const withdrawAmount = parseEther('1');
+
+      await Dice.write.withdrawToTreasury([mockToken.address, withdrawAmount], {
+        account: administrator.account.address,
+      });
+
+      // Get final token balances
+      const finalDiceTokenBalance = await mockToken.read.balanceOf([Dice.address]);
+      const finalTreasuryTokenBalance = await mockToken.read.balanceOf([treasury.address]);
+
+      expect(finalDiceTokenBalance).to.equal(initialDiceTokenBalance - withdrawAmount);
+      expect(finalTreasuryTokenBalance).to.equal(initialTreasuryTokenBalance + withdrawAmount);
+    });
+
+    it('Should revert if non-administrator tries to withdraw native tokens', async function () {
+      const { Dice, user, zeroAddress } = await loadFixture(deployDiceFixture);
 
       await expect(
-        Dice.write.withdrawToTreasury([parseEther('1')], {
+        Dice.write.withdrawToTreasury([zeroAddress, parseEther('1')], {
           account: user.account.address,
         }),
       ).to.be.rejected;
     });
 
-    it('Should revert if withdrawal amount is zero', async function () {
-      const { Dice, administrator } = await loadFixture(deployDiceFixture);
+    it('Should revert if non-administrator tries to withdraw ERC20 tokens', async function () {
+      const { Dice, user, mockToken } = await loadFixture(deployDiceFixture);
 
       await expect(
-        Dice.write.withdrawToTreasury([0n], {
-          account: administrator.account.address,
+        Dice.write.withdrawToTreasury([mockToken.address, parseEther('1')], {
+          account: user.account.address,
         }),
-      ).to.be.rejectedWith('_amounts is zero!');
+      ).to.be.rejected;
     });
 
-    it('Should revert if withdrawal amount exceeds contract balance', async function () {
-      const { Dice, administrator } = await loadFixture(deployDiceFixture);
+    it('Should revert if withdrawal amount is zero for native tokens', async function () {
+      const { Dice, administrator, zeroAddress } = await loadFixture(deployDiceFixture);
+
+      await expect(
+        Dice.write.withdrawToTreasury([zeroAddress, 0n], {
+          account: administrator.account.address,
+        }),
+      ).to.be.rejectedWith('_amount is zero!');
+    });
+
+    it('Should revert if withdrawal amount is zero for ERC20 tokens', async function () {
+      const { Dice, administrator, mockToken } = await loadFixture(deployDiceFixture);
+
+      await expect(
+        Dice.write.withdrawToTreasury([mockToken.address, 0n], {
+          account: administrator.account.address,
+        }),
+      ).to.be.rejectedWith('_amount is zero!');
+    });
+
+    it('Should revert if withdrawal amount exceeds contract balance for native tokens', async function () {
+      const { Dice, administrator, zeroAddress } = await loadFixture(deployDiceFixture);
 
       const contractBalance = await Dice.read.getContractBalance();
       const excessiveAmount = contractBalance + 1n;
 
       await expect(
-        Dice.write.withdrawToTreasury([excessiveAmount], {
+        Dice.write.withdrawToTreasury([zeroAddress, excessiveAmount], {
           account: administrator.account.address,
         }),
       ).to.be.rejectedWith('Insufficient contract balance');
+    });
+
+    it('Should revert if withdrawal amount exceeds contract balance for ERC20 tokens', async function () {
+      const { Dice, administrator, mockToken } = await loadFixture(deployDiceFixture);
+
+      const tokenBalance = await mockToken.read.balanceOf([Dice.address]);
+      const excessiveAmount = tokenBalance + 1n;
+
+      await expect(
+        Dice.write.withdrawToTreasury([mockToken.address, excessiveAmount], {
+          account: administrator.account.address,
+        }),
+      ).to.be.rejectedWith('Insufficient token balance');
     });
   });
 });

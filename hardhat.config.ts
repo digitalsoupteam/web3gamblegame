@@ -13,11 +13,13 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 1337,
-      // forking: {
-      //   url: 'https://rpc.ankr.com/base/941b1cae95390eb99b9b5aad2dfc41f101929436551ebbbae0883bf32a49e6e6',
-      // blockNumber: 34502813,
-      // },
+      forking: {
+        url: 'https://rpc.ankr.com/base/941b1cae95390eb99b9b5aad2dfc41f101929436551ebbbae0883bf32a49e6e6',
+        // blockNumber: 34502813,
+        blockNumber: 36109389,
+      },
       blockGasLimit: 30_000_000,
+      initialBaseFeePerGas: 0,
       accounts: {
         count: 10,
       },

@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import hre from 'hardhat';
-import { encodeFunctionData, getAddress, parseEther } from 'viem';
+import { encodeFunctionData, getAddress, parseEther, zeroAddress } from 'viem';
 import {
   impersonateAccount,
   loadFixture,
@@ -104,6 +104,40 @@ describe('PauseManager Integration Test', function () {
       account: deployer.account.address,
     });
 
+    // Deploy Pricers for native token
+    const nativePricerImpl = await hre.viem.deployContract('Pricer');
+    const nativePricerInitData = encodeFunctionData({
+      abi: nativePricerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address, 50000000000n, 'ETH/USD Pricer'], // $500 with 8 decimals
+    });
+    const nativePricerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      nativePricerImpl.address,
+      nativePricerInitData,
+    ]);
+    const nativePricer = await hre.viem.getContractAt('Pricer', nativePricerProxy.address);
+
+    // Deploy TokensManager
+    const tokensManagerImpl = await hre.viem.deployContract('TokensManager');
+    const tokensManagerInitData = encodeFunctionData({
+      abi: tokensManagerImpl.abi,
+      functionName: 'initialize',
+      args: [
+        addressBook.address,
+        [zeroAddress],
+        [nativePricer.address],
+      ],
+    });
+    const tokensManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      tokensManagerImpl.address,
+      tokensManagerInitData,
+    ]);
+    const tokensManager = await hre.viem.getContractAt('TokensManager', tokensManagerProxy.address);
+
+    await addressBook.write.initialSetTokensManager([tokensManager.address], {
+      account: deployer.account.address,
+    });
+
     // Deploy MockVRFCoordinator for Dice games
     const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
 
@@ -186,12 +220,12 @@ describe('PauseManager Integration Test', function () {
       );
 
       // Verify both games are operational before pause
-      await Dice1.write.roll([50n, 0], {
+      await Dice1.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });
 
-      await Dice2.write.roll([50n, 0], {
+      await Dice2.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });
@@ -203,14 +237,14 @@ describe('PauseManager Integration Test', function () {
 
       // Verify both games are now paused
       await expect(
-        Dice1.write.roll([50n, 0], {
+        Dice1.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
       ).to.be.rejectedWith('paused!');
 
       await expect(
-        Dice2.write.roll([50n, 0], {
+        Dice2.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
@@ -228,7 +262,7 @@ describe('PauseManager Integration Test', function () {
 
       // Verify both games are paused
       await expect(
-        Dice1.write.roll([50n, 0], {
+        Dice1.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
@@ -240,7 +274,7 @@ describe('PauseManager Integration Test', function () {
       });
 
       // Verify both games are operational again
-      await Dice1.write.roll([50n, 0], {
+      await Dice1.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });
@@ -250,7 +284,7 @@ describe('PauseManager Integration Test', function () {
         account: user.account.address,
       });
 
-      await Dice2.write.roll([50n, 0], {
+      await Dice2.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });
@@ -270,14 +304,14 @@ describe('PauseManager Integration Test', function () {
 
       // Verify Dice1 is paused
       await expect(
-        Dice1.write.roll([50n, 0], {
+        Dice1.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
       ).to.be.rejectedWith('paused!');
 
       // Verify Dice2 is still operational
-      await Dice2.write.roll([50n, 0], {
+      await Dice2.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });
@@ -294,7 +328,7 @@ describe('PauseManager Integration Test', function () {
 
       // Verify Dice1 is paused
       await expect(
-        Dice1.write.roll([50n, 0], {
+        Dice1.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
@@ -306,7 +340,7 @@ describe('PauseManager Integration Test', function () {
       });
 
       // Verify Dice1 is operational again
-      await Dice1.write.roll([50n, 0], {
+      await Dice1.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });
@@ -325,13 +359,13 @@ describe('PauseManager Integration Test', function () {
 
       // Verify Dice1 is paused and Dice2 is operational
       await expect(
-        Dice1.write.roll([50n, 0], {
+        Dice1.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
       ).to.be.rejectedWith('paused!');
 
-      await Dice2.write.roll([50n, 0], {
+      await Dice2.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });
@@ -343,14 +377,14 @@ describe('PauseManager Integration Test', function () {
 
       // Verify both games are now paused
       await expect(
-        Dice1.write.roll([50n, 0], {
+        Dice1.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
       ).to.be.rejectedWith('paused!');
 
       await expect(
-        Dice2.write.roll([50n, 0], {
+        Dice2.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
@@ -363,7 +397,7 @@ describe('PauseManager Integration Test', function () {
 
       // Verify Dice1 is still paused (due to contract-specific pause) but Dice2 is operational
       await expect(
-        Dice1.write.roll([50n, 0], {
+        Dice1.write.roll([50n, 0, zeroAddress, 0n], {
           account: user.account.address,
           value: parseEther('0.01'),
         })
@@ -374,7 +408,7 @@ describe('PauseManager Integration Test', function () {
         account: user.account.address,
       });
 
-      await Dice2.write.roll([50n, 0], {
+      await Dice2.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });
@@ -385,7 +419,7 @@ describe('PauseManager Integration Test', function () {
       });
 
       // Verify both games are now operational
-      await Dice1.write.roll([50n, 0], {
+      await Dice1.write.roll([50n, 0, zeroAddress, 0n], {
         account: user.account.address,
         value: parseEther('0.01'),
       });

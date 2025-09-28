@@ -13,7 +13,7 @@
 
 import { expect } from 'chai';
 import hre from 'hardhat';
-import { encodeFunctionData, getAddress, parseEther } from 'viem';
+import { encodeFunctionData, getAddress, parseEther, zeroAddress } from 'viem';
 import { loadFixture, setBalance, impersonateAccount } from '@nomicfoundation/hardhat-toolbox-viem/network-helpers';
 import fs from 'fs';
 import path from 'path';
@@ -82,6 +82,40 @@ describe('Dice Contract Economy Test', function () {
       account: deployer.account.address,
     });
 
+    // Deploy Pricers for native token
+    const nativePricerImpl = await hre.viem.deployContract('Pricer');
+    const nativePricerInitData = encodeFunctionData({
+      abi: nativePricerImpl.abi,
+      functionName: 'initialize',
+      args: [addressBook.address, 50000000000n, 'ETH/USD Pricer'], // $500 with 8 decimals
+    });
+    const nativePricerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      nativePricerImpl.address,
+      nativePricerInitData,
+    ]);
+    const nativePricer = await hre.viem.getContractAt('Pricer', nativePricerProxy.address);
+
+    // Deploy TokensManager
+    const tokensManagerImpl = await hre.viem.deployContract('TokensManager');
+    const tokensManagerInitData = encodeFunctionData({
+      abi: tokensManagerImpl.abi,
+      functionName: 'initialize',
+      args: [
+        addressBook.address,
+        [zeroAddress],
+        [nativePricer.address],
+      ],
+    });
+    const tokensManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
+      tokensManagerImpl.address,
+      tokensManagerInitData,
+    ]);
+    const tokensManager = await hre.viem.getContractAt('TokensManager', tokensManagerProxy.address);
+
+    await addressBook.write.initialSetTokensManager([tokensManager.address], {
+      account: deployer.account.address,
+    });
+
     const MockVRFCoordinator = await hre.viem.deployContract('MockVRFCoordinator', []);
 
     const DiceImpl = await hre.viem.deployContract('Dice', [MockVRFCoordinator.address]);
@@ -134,7 +168,8 @@ describe('Dice Contract Economy Test', function () {
     return { Dice, MockVRFCoordinator, user };
   }
 
-  it('Should run 1000 bets and track economy', async function () {
+  // 100 for fork and 1000 for clean local network
+  it('Should run 100 bets and track economy', async function () {
     const { Dice, MockVRFCoordinator, user } = await loadFixture(deployDiceFixture);
 
     let contractBalance = 100n * 10n ** 18n;
@@ -142,7 +177,7 @@ describe('Dice Contract Economy Test', function () {
 
     const results = [];
 
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 100; i++) {
       const betAmount = BigInt(Math.floor(Math.random() * 100) + 1) * 10n ** 16n;
 
       if (playerBalance < betAmount) continue;
@@ -159,7 +194,7 @@ describe('Dice Contract Economy Test', function () {
       playerBalance -= betAmount;
       contractBalance += betAmount;
 
-      await Dice.write.roll([BigInt(targetNumber), comparisonType], {
+      await Dice.write.roll([BigInt(targetNumber), comparisonType, zeroAddress, 0n], {
         account: user.account.address,
         value: betAmount,
       });

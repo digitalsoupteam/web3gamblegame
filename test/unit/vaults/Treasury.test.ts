@@ -140,15 +140,15 @@ describe('Treasury Contract', function () {
   describe('Receive Function', function () {
     it('Should accept ETH transfers', async function () {
       const { treasury, user, publicClient } = await loadFixture(deployTreasuryFixture);
-      
+
       const initialBalance = await publicClient.getBalance({ address: treasury.address });
       const transferAmount = parseEther('1');
-      
+
       await user.sendTransaction({
         to: treasury.address,
         value: transferAmount,
       });
-      
+
       const finalBalance = await publicClient.getBalance({ address: treasury.address });
       expect(finalBalance).to.equal(initialBalance + transferAmount);
     });
@@ -157,25 +157,25 @@ describe('Treasury Contract', function () {
   describe('Withdraw Function', function () {
     it('Should allow owners multisig to withdraw ERC20 tokens', async function () {
       const { treasury, ownersMultisig, recipient, mockToken } = await loadFixture(deployTreasuryFixture);
-      
+
       const initialTreasuryBalance = await mockToken.read.balanceOf([treasury.address]);
       const initialRecipientBalance = await mockToken.read.balanceOf([recipient.account.address]);
       const withdrawAmount = parseEther('100');
-      
+
       await treasury.write.withdraw([mockToken.address, withdrawAmount, recipient.account.address], {
         account: ownersMultisig.address,
       });
-      
+
       const finalTreasuryBalance = await mockToken.read.balanceOf([treasury.address]);
       const finalRecipientBalance = await mockToken.read.balanceOf([recipient.account.address]);
-      
+
       expect(finalTreasuryBalance).to.equal(initialTreasuryBalance - withdrawAmount);
       expect(finalRecipientBalance).to.equal(initialRecipientBalance + withdrawAmount);
     });
 
     it('Should revert if non-owner tries to withdraw', async function () {
       const { treasury, user, recipient, mockToken } = await loadFixture(deployTreasuryFixture);
-      
+
       await expect(
         treasury.write.withdraw([mockToken.address, parseEther('100'), recipient.account.address], {
           account: user.account.address,
@@ -185,7 +185,7 @@ describe('Treasury Contract', function () {
 
     it('Should revert if administrator tries to withdraw', async function () {
       const { treasury, administrator, recipient, mockToken } = await loadFixture(deployTreasuryFixture);
-      
+
       await expect(
         treasury.write.withdraw([mockToken.address, parseEther('100'), recipient.account.address], {
           account: administrator.account.address,
@@ -195,20 +195,20 @@ describe('Treasury Contract', function () {
 
     it('Should revert if withdrawal amount is zero', async function () {
       const { treasury, ownersMultisig, recipient, mockToken } = await loadFixture(deployTreasuryFixture);
-      
+
       await expect(
         treasury.write.withdraw([mockToken.address, 0n, recipient.account.address], {
           account: ownersMultisig.address,
         })
-      ).to.be.rejectedWith('_amounts is zero!');
+      ).to.be.rejectedWith('_amount is zero!');
     });
 
     it('Should revert if withdrawal amount exceeds balance', async function () {
       const { treasury, ownersMultisig, recipient, mockToken } = await loadFixture(deployTreasuryFixture);
-      
+
       const balance = await mockToken.read.balanceOf([treasury.address]);
       const excessiveAmount = balance + 1n;
-      
+
       await expect(
         treasury.write.withdraw([mockToken.address, excessiveAmount, recipient.account.address], {
           account: ownersMultisig.address,
@@ -220,26 +220,26 @@ describe('Treasury Contract', function () {
   describe('Upgrade Functionality', function () {
     it('Should allow owners multisig to upgrade the contract', async function () {
       const { treasury, ownersMultisig, publicClient } = await loadFixture(deployTreasuryFixture);
-      
+
       const newTreasuryImpl = await hre.viem.deployContract('Treasury');
-      
+
       await treasury.write.upgradeToAndCall([newTreasuryImpl.address, '0x'], {
         account: ownersMultisig.address,
       });
-      
+
       const implementationAddress = await getImplementationAddress(
         publicClient,
         treasury.address,
       );
-      
+
       expect(getAddress(implementationAddress)).to.equal(getAddress(newTreasuryImpl.address));
     });
 
     it('Should revert if non-owner tries to upgrade', async function () {
       const { treasury, user } = await loadFixture(deployTreasuryFixture);
-      
+
       const newTreasuryImpl = await hre.viem.deployContract('Treasury');
-      
+
       await expect(
         treasury.write.upgradeToAndCall([newTreasuryImpl.address, '0x'], {
           account: user.account.address,
@@ -249,9 +249,9 @@ describe('Treasury Contract', function () {
 
     it('Should revert if administrator tries to upgrade', async function () {
       const { treasury, administrator } = await loadFixture(deployTreasuryFixture);
-      
+
       const newTreasuryImpl = await hre.viem.deployContract('Treasury');
-      
+
       await expect(
         treasury.write.upgradeToAndCall([newTreasuryImpl.address, '0x'], {
           account: administrator.account.address,

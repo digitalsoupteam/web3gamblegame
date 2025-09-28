@@ -63,7 +63,7 @@ describe('GameManager Contract', function () {
       functionName: 'initialize',
       args: [addressBook.address],
     });
-    console.log('Impl:', gameManagerImpl.address);
+
     const gameManagerProxy = await hre.viem.deployContract('ERC1967Proxy', [
       gameManagerImpl.address,
       gameManagerInitData,

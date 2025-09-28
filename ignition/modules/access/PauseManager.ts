@@ -6,6 +6,7 @@ export default buildModule('PauseManagerModule', m => {
   const impl = m.contract('PauseManager');
   const initData = m.encodeFunctionCall(impl, 'initialize', [addressBookProxy]);
   const proxy = m.contract('ERC1967Proxy', [impl, initData]);
-  m.call(addressBookProxy, 'initialSetPauseManager', [proxy]);
+  const addressBook = m.contractAt("AddressBook", addressBookProxy);
+  m.call(addressBook, 'initialSetPauseManager', [proxy]);
   return { PauseManagerProxy: proxy, PauseManagerImpl: impl };
 });
