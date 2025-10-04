@@ -7,6 +7,7 @@ import TokensManagerModule from './tokens/TokensManager';
 import TreasuryModule from './vaults/Treasury';
 import GameManagerModule from './games/GameManager';
 import DiceModule from './games/Dice';
+import ReferralProgram from './vaults/ReferralProgram';
 
 const AllModule = buildModule('AllModule', m => {
   const accessRoles = m.useModule(AccessRolesModule);
@@ -15,6 +16,7 @@ const AllModule = buildModule('AllModule', m => {
   const pauseManager = m.useModule(PauseManagerModule);
   const tokensManager = m.useModule(TokensManagerModule);
   const treasury = m.useModule(TreasuryModule);
+  const referralProgram = m.useModule(ReferralProgram);
   const gameManager = m.useModule(GameManagerModule);
   const dice = m.useModule(DiceModule);
 
@@ -31,6 +33,8 @@ const AllModule = buildModule('AllModule', m => {
     TokensManagerImpl: tokensManager.tokensManagerImpl,
     TreasuryProxy: treasury.treasuryProxy,
     TreasuryImpl: treasury.treasuryImpl,
+    ReferralProgramProxy: referralProgram.referralProgramProxy,
+    ReferralProgramImpl: referralProgram.referralProgramImpl,
     gameManagerProxy: gameManager.gameManagerProxy,
     gameManagerImpl: gameManager.gameManagerImpl,
     diceProxy: dice.diceProxy,

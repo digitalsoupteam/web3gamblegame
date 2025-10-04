@@ -5,6 +5,7 @@ import {IAccessRoles} from "./IAccessRoles.sol";
 import {IGameManager} from "../../_interfaces/games/IGameManager.sol";
 import {IPauseManager} from "../../_interfaces/access/IPauseManager.sol";
 import {ITokensManager} from "../tokens/ITokensManager.sol";
+import {IReferralProgram} from "../vaults/IReferralProgram.sol";
 
 interface IAddressBook {
     function accessRoles() external view returns (IAccessRoles);
@@ -16,4 +17,6 @@ interface IAddressBook {
     function treasury() external view returns (address);
 
     function tokensManager() external view returns (ITokensManager);
+
+    function referralProgram() external view returns (IReferralProgram);
 }

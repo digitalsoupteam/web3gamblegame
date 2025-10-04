@@ -329,6 +329,12 @@ contract Dice is VRFConsumerBaseV2Plus, UUPSUpgradeable, IGame {
             won ? bet.payout : 0,
             bet.token
         );
+
+        addressBook.referralProgram().addReward(
+            msg.sender,
+            bet.amount,
+            bet.token
+        );
     }
 
     /**

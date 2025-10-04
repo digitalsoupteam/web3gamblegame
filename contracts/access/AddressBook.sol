@@ -8,6 +8,7 @@ import {IAddressBook} from "../_interfaces/access/IAddressBook.sol";
 import {IGameManager} from "../_interfaces/games/IGameManager.sol";
 import {IPauseManager} from "../_interfaces/access/IPauseManager.sol";
 import {ITokensManager} from "../_interfaces/tokens/ITokensManager.sol";
+import {IReferralProgram} from "../_interfaces/vaults/IReferralProgram.sol";
 
 contract AddressBook is IAddressBook, UUPSUpgradeable {
     IAccessRoles public accessRoles;
@@ -15,6 +16,7 @@ contract AddressBook is IAddressBook, UUPSUpgradeable {
     IPauseManager public pauseManager;
     address public treasury;
     ITokensManager public tokensManager;
+    IReferralProgram public referralProgram;
 
     function initialize(address _accessRoles) public initializer {
         require(_accessRoles != address(0), "_accessRoles is zero!");
@@ -47,6 +49,13 @@ contract AddressBook is IAddressBook, UUPSUpgradeable {
         require(_tokensManager != address(0), "_tokensManager is zero!");
         require(address(tokensManager) == address(0), "tokensManager contract exists!");
         tokensManager = ITokensManager(_tokensManager);
+    }
+
+    function initialSetReferralProgram(address _referralProgram) external {
+        accessRoles.requireDeployer(msg.sender);
+        require(_referralProgram != address(0), "_referralProgram is zero!");
+        require(address(referralProgram) == address(0), "referralProgram contract exists!");
+        referralProgram = IReferralProgram(_referralProgram);
     }
 
     function _authorizeUpgrade(address) internal view override {
